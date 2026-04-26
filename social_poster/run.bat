@@ -1,5 +1,5 @@
 @echo off
-REM Launch the multi-platform social poster web tool.
+REM Launch CloudPost - multi-platform social poster web tool.
 cd /d "%~dp0"
 
 if not exist .env (

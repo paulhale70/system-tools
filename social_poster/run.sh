@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the multi-platform social poster web tool.
+# Launch CloudPost - multi-platform social poster web tool.
 set -e
 cd "$(dirname "$0")"
 
