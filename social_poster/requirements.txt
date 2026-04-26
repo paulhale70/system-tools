@@ -1,0 +1,6 @@
+Flask>=3.0
+python-dotenv>=1.0
+requests>=2.31
+tweepy>=4.14
+atproto>=0.0.46
+Pillow>=10.0

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Multi-Platform Social Poster</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <main class="container">
+    <h1>Cross-post to social</h1>
+    <p class="subtitle">Compose once, publish to Twitter, Bluesky, and Facebook.</p>
+
+    <form id="post-form" autocomplete="off">
+      <label for="text" class="label">Message</label>
+      <textarea id="text" name="text" rows="6" maxlength="5000"
+                placeholder="What do you want to share?"></textarea>
+      <div class="meta">
+        <span id="char-count">0</span> chars
+        <span class="limit" data-platform="twitter">· Twitter 280</span>
+        <span class="limit" data-platform="bluesky">· Bluesky 300</span>
+      </div>
+
+      <label for="image" class="label">Image (optional)</label>
+      <input id="image" name="image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" />
+
+      <fieldset class="platforms">
+        <legend>Post to</legend>
+        {% for name, configured in status.items() %}
+        <label class="platform {% if not configured %}disabled{% endif %}">
+          <input type="checkbox" name="platforms" value="{{ name }}"
+                 {% if configured %}checked{% else %}disabled{% endif %} />
+          <span class="name">{{ name|capitalize }}</span>
+          {% if not configured %}<span class="tag">not configured</span>{% endif %}
+        </label>
+        {% endfor %}
+      </fieldset>
+
+      <button type="submit" id="submit">Post</button>
+    </form>
+
+    <section id="results" class="results" hidden>
+      <h2>Results</h2>
+      <ul id="results-list"></ul>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
