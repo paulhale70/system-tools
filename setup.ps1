@@ -35,7 +35,12 @@ function Write-Step($msg) {
 }
 
 function Have-Cmd($name) {
-    [bool](Get-Command $name -ErrorAction SilentlyContinue)
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if (-not $cmd) { return $false }
+    # Reject Windows "App execution alias" stubs (e.g. the python.exe under
+    # %LOCALAPPDATA%\Microsoft\WindowsApps that just opens the Store).
+    if ($cmd.Source -and $cmd.Source -match '\\WindowsApps\\') { return $false }
+    return $true
 }
 
 function Ensure-Winget {
