@@ -43,14 +43,8 @@ function Have-Cmd($name) {
     return $true
 }
 
-function Ensure-Winget {
-    if (-not (Have-Cmd winget)) {
-        throw "winget not found. Install 'App Installer' from the Microsoft Store, then re-run this script."
-    }
-}
-
 function Install-WithWinget($id, $friendlyName) {
-    Write-Step "Installing $friendlyName ($id)"
+    Write-Step "Installing $friendlyName via winget ($id)"
     winget install --id $id --exact --silent --accept-source-agreements --accept-package-agreements
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
         # -1978335189 = APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED
@@ -64,15 +58,49 @@ function Refresh-Path {
     $env:Path = "$machine;$user"
 }
 
+function Download-File($url, $dest) {
+    Write-Step "Downloading $url"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+}
+
+function Install-PythonDirect {
+    $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { 'win32' }
+    $url  = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-$arch.exe"
+    $exe  = Join-Path $env:TEMP 'python-installer.exe'
+    Download-File $url $exe
+    Write-Step 'Running Python installer (silent, PrependPath=1)'
+    $p = Start-Process $exe -ArgumentList '/quiet','InstallAllUsers=0','PrependPath=1','Include_test=0' -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "Python installer exited $($p.ExitCode)." }
+    Remove-Item $exe -ErrorAction SilentlyContinue
+}
+
+function Install-GitDirect {
+    $arch = if ([Environment]::Is64BitOperatingSystem) { '64-bit' } else { '32-bit' }
+    # Use the GitHub releases API to find the latest stable installer.
+    $rel = Invoke-RestMethod 'https://api.github.com/repos/git-for-windows/git/releases/latest' -UseBasicParsing
+    $asset = $rel.assets | Where-Object { $_.name -match "Git-.*-$arch\.exe$" } | Select-Object -First 1
+    if (-not $asset) { throw 'Could not find a Git for Windows installer asset.' }
+    $exe = Join-Path $env:TEMP $asset.name
+    Download-File $asset.browser_download_url $exe
+    Write-Step 'Running Git installer (silent)'
+    $p = Start-Process $exe -ArgumentList '/VERYSILENT','/NORESTART','/SUPPRESSMSGBOXES','/NOCANCEL' -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "Git installer exited $($p.ExitCode)." }
+    Remove-Item $exe -ErrorAction SilentlyContinue
+}
+
 # ---------------------------------------------------------------------------
 # 1. Python
 # ---------------------------------------------------------------------------
-Ensure-Winget
-
 if (Have-Cmd python) {
     Write-Step "Python already installed: $((& python --version) 2>&1)"
 } else {
-    Install-WithWinget 'Python.Python.3.12' 'Python 3.12'
+    if (Have-Cmd winget) {
+        Install-WithWinget 'Python.Python.3.12' 'Python 3.12'
+    } else {
+        Write-Step 'winget not available — falling back to direct python.org installer'
+        Install-PythonDirect
+    }
     Refresh-Path
     if (-not (Have-Cmd python)) {
         throw "Python install completed but 'python' is still not on PATH. Open a new terminal and re-run."
@@ -85,7 +113,12 @@ if (Have-Cmd python) {
 if (Have-Cmd git) {
     Write-Step "Git already installed: $((& git --version) 2>&1)"
 } else {
-    Install-WithWinget 'Git.Git' 'Git'
+    if (Have-Cmd winget) {
+        Install-WithWinget 'Git.Git' 'Git'
+    } else {
+        Write-Step 'winget not available — falling back to direct git-scm.com installer'
+        Install-GitDirect
+    }
     Refresh-Path
     if (-not (Have-Cmd git)) {
         throw "Git install completed but 'git' is still not on PATH. Open a new terminal and re-run."
