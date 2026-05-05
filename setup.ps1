@@ -17,14 +17,27 @@
     Git URL of the repo.
 
 .PARAMETER RestoreDb
-    Path to a media_inventory.db backup to copy into %USERPROFILE%.
+    Path to a media_inventory.db backup to copy into the configured DB
+    location (defaults to %USERPROFILE%\media_inventory.db).
+
+.PARAMETER DbPath
+    Override where media_inventory.db lives. Writes
+    %USERPROFILE%\.media_inventory_config.json so the app reads it on
+    startup. Use this to point the DB at a cloud-synced folder.
+
+.PARAMETER UseOneDrive
+    Convenience flag: store the DB at
+    <OneDrive>\MediaInventoryScanner\media_inventory.db. Detected from
+    the $env:OneDrive variable Windows sets when OneDrive is signed in.
 #>
 
 [CmdletBinding()]
 param(
-    [string]$InstallDir = (Join-Path $env:USERPROFILE 'System-tools'),
-    [string]$RepoUrl    = 'https://github.com/paulhale70/System-tools.git',
-    [string]$RestoreDb
+    [string]$InstallDir  = (Join-Path $env:USERPROFILE 'System-tools'),
+    [string]$RepoUrl     = 'https://github.com/paulhale70/System-tools.git',
+    [string]$RestoreDb,
+    [string]$DbPath,
+    [switch]$UseOneDrive
 )
 
 $ErrorActionPreference = 'Stop'
@@ -148,13 +161,45 @@ Write-Step 'Installing requirements.txt'
 python -m pip install -r (Join-Path $InstallDir 'requirements.txt')
 
 # ---------------------------------------------------------------------------
-# 5. Optional database restore
+# 5. Configure DB location (auto-sync via cloud folder)
+# ---------------------------------------------------------------------------
+$configPath = Join-Path $env:USERPROFILE '.media_inventory_config.json'
+$resolvedDb = $null
+
+if ($UseOneDrive) {
+    if (-not $env:OneDrive) {
+        throw '-UseOneDrive specified but $env:OneDrive is not set. Sign in to OneDrive first.'
+    }
+    $resolvedDb = Join-Path $env:OneDrive 'MediaInventoryScanner\media_inventory.db'
+} elseif ($DbPath) {
+    $resolvedDb = $DbPath
+}
+
+if ($resolvedDb) {
+    $resolvedDb = [Environment]::ExpandEnvironmentVariables($resolvedDb)
+    $parent = Split-Path $resolvedDb -Parent
+    if ($parent -and -not (Test-Path $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Write-Step "Writing DB location to $configPath -> $resolvedDb"
+    @{ db_path = $resolvedDb } | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
+
+    # Migrate existing default-location DB into the new location, if any.
+    $defaultDb = Join-Path $env:USERPROFILE 'media_inventory.db'
+    if ((Test-Path $defaultDb) -and -not (Test-Path $resolvedDb)) {
+        Write-Step "Moving existing $defaultDb -> $resolvedDb"
+        Move-Item $defaultDb $resolvedDb
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 6. Optional database restore
 # ---------------------------------------------------------------------------
 if ($RestoreDb) {
     if (-not (Test-Path $RestoreDb)) {
         throw "RestoreDb path not found: $RestoreDb"
     }
-    $dest = Join-Path $env:USERPROFILE 'media_inventory.db'
+    $dest = if ($resolvedDb) { $resolvedDb } else { Join-Path $env:USERPROFILE 'media_inventory.db' }
     if (Test-Path $dest) {
         $backup = "$dest.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
         Write-Step "Backing up existing DB to $backup"
@@ -165,9 +210,10 @@ if ($RestoreDb) {
 }
 
 # ---------------------------------------------------------------------------
-# 6. Done
+# 7. Done
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Host 'Setup complete.' -ForegroundColor Green
 Write-Host "Project:   $InstallDir"
+if ($resolvedDb) { Write-Host "DB:        $resolvedDb" }
 Write-Host "Launch:    double-click run.bat, or run 'python main.py' from $InstallDir"

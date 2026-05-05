@@ -3,10 +3,33 @@ import json
 import os
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.expanduser("~"), "media_inventory.db")
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".media_inventory_config.json")
+DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), "media_inventory.db")
+
+
+def _resolve_db_path() -> str:
+    env = os.environ.get("MEDIA_INVENTORY_DB")
+    if env:
+        return os.path.expanduser(env)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            path = cfg.get("db_path")
+            if path:
+                return os.path.expanduser(path)
+        except Exception:
+            pass
+    return DEFAULT_DB_PATH
+
+
+DB_PATH = _resolve_db_path()
 
 
 def get_connection():
+    parent = os.path.dirname(DB_PATH)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
