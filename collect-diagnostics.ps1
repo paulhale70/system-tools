@@ -4,10 +4,12 @@
 
 .DESCRIPTION
     Gathers system info, Python and dependency state, app file inventory,
-    SQLite database metadata, recent Windows Application/System event log
-    errors, Windows Error Reporting (WER) crash artifacts, and API
-    connectivity checks. Everything is written to a timestamped folder on the
-    Desktop and zipped for easy sharing.
+    SQLite database health (resolved path, integrity check, row counts),
+    recent Windows Application/System event log errors, Windows Error
+    Reporting (WER) crash artifacts, network diagnostics (DNS, proxy, time
+    skew, API reachability), and an end-to-end lookup pipeline test.
+    Writes a top-level SUMMARY.txt with green/yellow/red verdicts, then
+    zips everything for easy sharing.
 
     Run from the project folder:
         powershell -ExecutionPolicy Bypass -File .\collect-diagnostics.ps1
@@ -54,7 +56,42 @@ function Try-Run($label, [scriptblock]$block) {
         & $block
     } catch {
         Write-Warning "$label failed: $($_.Exception.Message)"
+        Add-Summary 'FAIL' "$label : $($_.Exception.Message)"
     }
+}
+
+$script:summary = New-Object System.Collections.ArrayList
+
+function Add-Summary($level, $msg) {
+    $color = switch ($level) {
+        'OK'   { 'Green' }
+        'WARN' { 'Yellow' }
+        'FAIL' { 'Red' }
+        default { 'White' }
+    }
+    $line = "[$level] $msg"
+    Write-Host $line -ForegroundColor $color
+    [void]$script:summary.Add($line)
+}
+
+function Find-AppRoot {
+    if ($PSScriptRoot) { return $PSScriptRoot }
+    if (Test-Path (Join-Path (Get-Location) 'main.py')) { return (Get-Location).Path }
+    return $null
+}
+
+function Invoke-PythonScript($appRoot, $code) {
+    $tmp = Join-Path $env:TEMP ("dx_" + [guid]::NewGuid().ToString('N') + '.py')
+    Set-Content -Path $tmp -Value $code -Encoding UTF8
+    try {
+        Push-Location $appRoot
+        $out = & python $tmp 2>&1 | Out-String
+        $exit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        Remove-Item $tmp -ErrorAction SilentlyContinue
+    }
+    [PSCustomObject]@{ Output = $out; ExitCode = $exit }
 }
 
 # ---------------------------------------------------------------------------
@@ -103,14 +140,31 @@ Try-Run 'System info' {
 Write-Section '2. Python + dependencies'
 Try-Run 'Python detection' {
     $pyOut = New-Object System.Text.StringBuilder
+    $stubAhead = $false
 
     foreach ($cmd in 'python','py','python3') {
         $exe = Get-Command $cmd -ErrorAction SilentlyContinue
         if ($exe) {
             $null = $pyOut.AppendLine("--- $cmd ($($exe.Source)) ---")
+            if ($exe.Source -match '\\WindowsApps\\') {
+                $null = $pyOut.AppendLine('(WindowsApps app-execution-alias stub — not a real Python.)')
+                if ($cmd -eq 'python') { $stubAhead = $true }
+                continue
+            }
             $null = $pyOut.AppendLine((& $cmd --version 2>&1 | Out-String).Trim())
             $null = $pyOut.AppendLine((& $cmd -c "import sys; print(sys.executable); print(sys.version); print(sys.path)" 2>&1 | Out-String))
         }
+    }
+
+    $real = Get-Command python -All -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notmatch '\\WindowsApps\\' } | Select-Object -First 1
+    if ($real) {
+        Add-Summary 'OK' "python -> $($real.Source)"
+    } else {
+        Add-Summary 'FAIL' 'No real Python on PATH (only WindowsApps stub or none).'
+    }
+    if ($stubAhead -and $real) {
+        Add-Summary 'WARN' 'WindowsApps python.exe stub is on PATH; disable it under Settings > Apps > App execution aliases.'
     }
 
     $pip = Get-Command pip -ErrorAction SilentlyContinue
@@ -147,13 +201,79 @@ Try-Run 'App inventory' {
 }
 
 # ---------------------------------------------------------------------------
-# 4. SQLite database
+# 4. SQLite database (resolved path, integrity, row counts)
 # ---------------------------------------------------------------------------
 Write-Section '4. SQLite database'
 Try-Run 'Database info' {
-    $dbPath = Join-Path $env:USERPROFILE 'media_inventory.db'
-    if (Test-Path $dbPath) {
-        $f = Get-Item $dbPath
+    $appRoot = Find-AppRoot
+    $configPath = Join-Path $env:USERPROFILE '.media_inventory_config.json'
+    $report = New-Object System.Text.StringBuilder
+
+    $null = $report.AppendLine("MEDIA_INVENTORY_DB env var: $([string]::IsNullOrEmpty($env:MEDIA_INVENTORY_DB) ? '(unset)' : $env:MEDIA_INVENTORY_DB)")
+    $null = $report.AppendLine("Config file: $configPath  (exists: $(Test-Path $configPath))")
+    if (Test-Path $configPath) {
+        $null = $report.AppendLine('--- config contents ---')
+        $null = $report.AppendLine((Get-Content $configPath -Raw))
+        Copy-Item $configPath (Join-Path $reportDir '04-config.json') -Force
+    }
+
+    $resolvedDb = $null
+    if ($appRoot -and (Test-Path (Join-Path $appRoot 'database.py'))) {
+        $py = @'
+import json, os, sqlite3, sys
+sys.path.insert(0, os.getcwd())
+import database
+print("RESOLVED:", database.DB_PATH)
+print("EXISTS:", os.path.exists(database.DB_PATH))
+if os.path.exists(database.DB_PATH):
+    print("SIZE:", os.path.getsize(database.DB_PATH))
+    try:
+        c = sqlite3.connect(database.DB_PATH)
+        c.row_factory = sqlite3.Row
+        print("INTEGRITY:", c.execute("PRAGMA integrity_check").fetchone()[0])
+        print("QUICK:", c.execute("PRAGMA quick_check").fetchone()[0])
+        for t in ("items", "lookup_cache"):
+            try:
+                n = c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                print(f"COUNT[{t}]:", n)
+            except Exception as e:
+                print(f"COUNT[{t}]: ERROR {e}")
+        try:
+            stats = {}
+            for cat in ("CD", "Book", "Blu-ray"):
+                stats[cat] = c.execute("SELECT COUNT(*) FROM items WHERE category = ?", (cat,)).fetchone()[0]
+            print("BY_CATEGORY:", json.dumps(stats))
+        except Exception as e:
+            print("BY_CATEGORY: ERROR", e)
+        print("--- schema ---")
+        for row in c.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL").fetchall():
+            print(row[0])
+        c.close()
+    except Exception as e:
+        print("OPEN_ERROR:", e)
+'@
+        $r = Invoke-PythonScript $appRoot $py
+        $null = $report.AppendLine('--- python database.py resolution ---')
+        $null = $report.AppendLine($r.Output)
+        if ($r.Output -match 'RESOLVED:\s*(.+)') { $resolvedDb = $Matches[1].Trim() }
+
+        if ($r.Output -match 'INTEGRITY:\s*ok' -and $r.Output -match 'QUICK:\s*ok') {
+            Add-Summary 'OK' "DB integrity ok at $resolvedDb"
+        } elseif ($r.Output -match 'INTEGRITY:') {
+            Add-Summary 'FAIL' 'DB integrity check returned errors (see 04-database.txt).'
+        } elseif ($r.Output -match 'EXISTS:\s*False') {
+            Add-Summary 'WARN' "DB does not exist yet at $resolvedDb (will be created on first launch)."
+        } else {
+            Add-Summary 'WARN' 'DB integrity could not be determined; see 04-database.txt.'
+        }
+    } else {
+        $null = $report.AppendLine('database.py not reachable from working directory; using fallback default.')
+        $resolvedDb = Join-Path $env:USERPROFILE 'media_inventory.db'
+        Add-Summary 'WARN' 'Run collect-diagnostics.ps1 from the project folder for full DB diagnostics.'
+    }
+
+    if ($resolvedDb -and (Test-Path $resolvedDb)) {
+        $f = Get-Item $resolvedDb
         $info = [PSCustomObject]@{
             Path          = $f.FullName
             SizeBytes     = $f.Length
@@ -161,11 +281,20 @@ Try-Run 'Database info' {
             LastWriteTime = $f.LastWriteTime
             CreationTime  = $f.CreationTime
             SHA256        = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+            Attributes    = $f.Attributes.ToString()
         }
-        $info | Format-List | Out-String | Set-Content (Join-Path $reportDir '04-database.txt')
-    } else {
-        "Database not found at $dbPath" | Set-Content (Join-Path $reportDir '04-database.txt')
+        $null = $report.AppendLine('--- file info ---')
+        $null = $report.AppendLine(($info | Format-List | Out-String))
+
+        # OneDrive / Files-On-Demand placeholder check.
+        # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000, RECALL_ON_OPEN = 0x40000
+        $rawAttr = [int]$f.Attributes
+        if (($rawAttr -band 0x400000) -or ($rawAttr -band 0x40000)) {
+            Add-Summary 'FAIL' "DB file is a cloud placeholder (not fully downloaded): $resolvedDb"
+        }
     }
+
+    Save-Text '04-database.txt' $report.ToString()
 }
 
 # ---------------------------------------------------------------------------
@@ -253,9 +382,77 @@ Try-Run 'WER artifacts' {
 }
 
 # ---------------------------------------------------------------------------
-# 7. Network / API connectivity
+# 7. Network: DNS, proxy, time, API connectivity
 # ---------------------------------------------------------------------------
-Write-Section '7. API connectivity'
+Write-Section '7. Network diagnostics'
+Try-Run 'DNS' {
+    $hosts = 'api.upcitemdb.com','www.googleapis.com','openlibrary.org','musicbrainz.org'
+    $rows = foreach ($h in $hosts) {
+        try {
+            $r = Resolve-DnsName -Name $h -Type A -ErrorAction Stop -DnsOnly |
+                 Where-Object { $_.IPAddress } | Select-Object -First 3
+            [PSCustomObject]@{ Host = $h; IPs = ($r.IPAddress -join ', '); Error = '' }
+        } catch {
+            Add-Summary 'FAIL' "DNS lookup failed for $h : $($_.Exception.Message)"
+            [PSCustomObject]@{ Host = $h; IPs = ''; Error = $_.Exception.Message }
+        }
+    }
+    $rows | Format-Table -AutoSize -Wrap | Out-String |
+        Set-Content (Join-Path $reportDir '07-dns.txt')
+}
+
+Try-Run 'Proxy' {
+    $sb = New-Object System.Text.StringBuilder
+    $null = $sb.AppendLine('--- netsh winhttp show proxy ---')
+    $null = $sb.AppendLine((& netsh winhttp show proxy 2>&1 | Out-String))
+    $null = $sb.AppendLine('--- env vars ---')
+    foreach ($v in 'HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy') {
+        $val = [Environment]::GetEnvironmentVariable($v)
+        $null = $sb.AppendLine("$v = $val")
+    }
+    $null = $sb.AppendLine('--- IE / WinINET (per-user) ---')
+    try {
+        $reg = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+        $null = $sb.AppendLine("ProxyEnable = $($reg.ProxyEnable)")
+        $null = $sb.AppendLine("ProxyServer = $($reg.ProxyServer)")
+        $null = $sb.AppendLine("AutoConfigURL = $($reg.AutoConfigURL)")
+        if ($reg.ProxyEnable -eq 1) {
+            Add-Summary 'WARN' "WinINET proxy is enabled ($($reg.ProxyServer)); requests may be intercepted."
+        }
+    } catch {
+        $null = $sb.AppendLine("(could not read: $($_.Exception.Message))")
+    }
+    Save-Text '07-proxy.txt' $sb.ToString()
+}
+
+Try-Run 'Time skew' {
+    $out = & w32tm /query /status 2>&1 | Out-String
+    Save-Text '07-time.txt' $out
+    $local = [DateTimeOffset]::UtcNow
+    try {
+        $hdr = (Invoke-WebRequest 'https://www.google.com' -UseBasicParsing -TimeoutSec 8 -Method Head).Headers['Date']
+        if ($hdr) {
+            $remote = [DateTimeOffset]::Parse($hdr)
+            $skew = ($local - $remote).TotalSeconds
+            Add-Content (Join-Path $reportDir '07-time.txt') "`nLocal: $($local.ToString('o'))`nRemote (google): $($remote.ToString('o'))`nSkew (seconds): $skew"
+            if ([math]::Abs($skew) -gt 60) {
+                Add-Summary 'FAIL' "Clock skew is $([int]$skew)s vs google.com — TLS to APIs may fail."
+            } else {
+                Add-Summary 'OK' "Clock skew $([int]$skew)s within tolerance."
+            }
+        }
+    } catch {
+        Add-Content (Join-Path $reportDir '07-time.txt') "`nSkew check failed: $($_.Exception.Message)"
+    }
+}
+
+Try-Run 'Firewall profiles' {
+    Get-NetFirewallProfile -ErrorAction SilentlyContinue |
+        Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction |
+        Format-Table -AutoSize | Out-String |
+        Set-Content (Join-Path $reportDir '07-firewall.txt')
+}
+
 Try-Run 'API checks' {
     $endpoints = @(
         'https://api.upcitemdb.com/prod/trial/lookup?upc=000000000000'
@@ -268,24 +465,23 @@ Try-Run 'API checks' {
         try {
             $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
             $sw.Stop()
-            [PSCustomObject]@{
-                Url     = $url
-                Status  = $resp.StatusCode
-                TimeMs  = $sw.ElapsedMilliseconds
-                Error   = ''
-            }
+            [PSCustomObject]@{ Url=$url; Status=$resp.StatusCode; TimeMs=$sw.ElapsedMilliseconds; Error='' }
         } catch {
             $sw.Stop()
-            [PSCustomObject]@{
-                Url     = $url
-                Status  = ''
-                TimeMs  = $sw.ElapsedMilliseconds
-                Error   = $_.Exception.Message
-            }
+            [PSCustomObject]@{ Url=$url; Status=''; TimeMs=$sw.ElapsedMilliseconds; Error=$_.Exception.Message }
         }
     }
     $results | Format-Table -AutoSize -Wrap | Out-String |
         Set-Content (Join-Path $reportDir '07-api-connectivity.txt')
+
+    $reachable = ($results | Where-Object { $_.Status }).Count
+    if ($reachable -eq $results.Count) {
+        Add-Summary 'OK' "All $reachable lookup APIs reachable."
+    } elseif ($reachable -eq 0) {
+        Add-Summary 'FAIL' 'No lookup APIs reachable — check network/firewall/proxy.'
+    } else {
+        Add-Summary 'WARN' "$reachable of $($results.Count) lookup APIs reachable; partial outage or rate limit."
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -309,16 +505,76 @@ Try-Run 'Processes' {
 }
 
 # ---------------------------------------------------------------------------
-# 9. Zip everything up
+# 9. End-to-end lookup pipeline test
 # ---------------------------------------------------------------------------
+Write-Section '9. Lookup pipeline test'
+Try-Run 'Lookup pipeline' {
+    $appRoot = Find-AppRoot
+    if (-not $appRoot -or -not (Test-Path (Join-Path $appRoot 'lookup.py'))) {
+        'lookup.py not reachable from working directory; skipped.' |
+            Set-Content (Join-Path $reportDir '09-lookup.txt')
+        Add-Summary 'WARN' 'Lookup pipeline test skipped (run from project folder).'
+        return
+    }
+    $py = @'
+import json, sys, time, traceback, os
+sys.path.insert(0, os.getcwd())
+import lookup
+# Known-good UPC: Pink Floyd "Dark Side of the Moon" CD reissue.
+upc = "828766516920"
+t0 = time.time()
+try:
+    result = lookup.lookup_upc(upc)
+    elapsed = time.time() - t0
+    print("ELAPSED:", round(elapsed, 2), "s")
+    print("RESULT:", json.dumps(result, default=str, indent=2)[:2000])
+except Exception:
+    print("ELAPSED:", round(time.time() - t0, 2), "s")
+    print("ERROR:")
+    traceback.print_exc()
+'@
+    $r = Invoke-PythonScript $appRoot $py
+    Save-Text '09-lookup.txt' $r.Output
+    if ($r.Output -match '"title"' -or $r.Output -match 'RESULT:\s*\{') {
+        Add-Summary 'OK' 'Lookup pipeline returned a result for the known-good UPC.'
+    } elseif ($r.Output -match 'ERROR:') {
+        Add-Summary 'FAIL' 'Lookup pipeline raised an exception (see 09-lookup.txt).'
+    } else {
+        Add-Summary 'WARN' 'Lookup pipeline returned no match for the known-good UPC (rate-limited?).'
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 10. Write SUMMARY.txt and zip everything up
+# ---------------------------------------------------------------------------
+$summaryPath = Join-Path $reportDir '00-SUMMARY.txt'
+$header = @(
+    "Media Inventory Scanner — diagnostics summary"
+    "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    "Host: $env:COMPUTERNAME  User: $env:USERNAME"
+    ('-' * 60)
+    ''
+)
+$counts = $script:summary | Group-Object { ($_ -split ' ',2)[0] } |
+    ForEach-Object { "{0,-7} {1}" -f $_.Name, $_.Count }
+($header + $counts + '' + ($script:summary | Sort-Object)) -join "`r`n" |
+    Set-Content $summaryPath -Encoding UTF8
+
 Stop-Transcript | Out-Null
 
 $zipPath = "$reportDir.zip"
-Compress-Archive -Path (Join-Path $reportDir '*') -DestinationPath $zipPath -Force
+Compress-Archive -Path (Join-Path $reportDir '*') -DestinationPath $zipPath -Force -CompressionLevel Optimal
 
 Write-Host ''
-Write-Host "Diagnostics collected:" -ForegroundColor Green
+Write-Host 'Diagnostics collected:' -ForegroundColor Green
 Write-Host "  Folder: $reportDir"
 Write-Host "  Zip:    $zipPath"
 Write-Host ''
+Write-Host 'Top-level verdicts:'
+Get-Content $summaryPath | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
+Write-Host ''
 Write-Host 'Send the zip file when reporting an issue.'
+
+if (-not $env:CI) {
+    Try-Run 'Open folder' { Start-Process explorer.exe $reportDir }
+}
