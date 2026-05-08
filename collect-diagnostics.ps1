@@ -209,7 +209,8 @@ Try-Run 'Database info' {
     $configPath = Join-Path $env:USERPROFILE '.media_inventory_config.json'
     $report = New-Object System.Text.StringBuilder
 
-    $null = $report.AppendLine("MEDIA_INVENTORY_DB env var: $([string]::IsNullOrEmpty($env:MEDIA_INVENTORY_DB) ? '(unset)' : $env:MEDIA_INVENTORY_DB)")
+    $envDbVal = if ([string]::IsNullOrEmpty($env:MEDIA_INVENTORY_DB)) { '(unset)' } else { $env:MEDIA_INVENTORY_DB }
+    $null = $report.AppendLine("MEDIA_INVENTORY_DB env var: $envDbVal")
     $null = $report.AppendLine("Config file: $configPath  (exists: $(Test-Path $configPath))")
     if (Test-Path $configPath) {
         $null = $report.AppendLine('--- config contents ---')
