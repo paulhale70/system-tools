@@ -480,7 +480,7 @@ Try-Run 'Lookup pipeline' {
     if ($helper -and (Test-Path $helper) -and (Test-Path (Join-Path $appRoot 'lookup.py'))) {
         $r = Invoke-PythonScript $appRoot $helper
         Save-Text '09-lookup.txt' $r.Output
-        if ($r.Output -match '"title"' -or $r.Output -match 'RESULT:\s*\{') {
+        if ($r.Output -match '"title"') {
             Add-Summary 'OK' 'Lookup pipeline returned a result for the known-good UPC.'
         } elseif ($r.Output -match 'ERROR:') {
             Add-Summary 'FAIL' 'Lookup pipeline raised an exception (see 09-lookup.txt).'
