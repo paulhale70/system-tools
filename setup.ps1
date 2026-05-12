@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Bootstraps the Media Inventory Scanner on a fresh Windows machine.
 
@@ -111,7 +111,7 @@ if (Have-Cmd python) {
     if (Have-Cmd winget) {
         Install-WithWinget 'Python.Python.3.12' 'Python 3.12'
     } else {
-        Write-Step 'winget not available — falling back to direct python.org installer'
+        Write-Step 'winget not available - falling back to direct python.org installer'
         Install-PythonDirect
     }
     Refresh-Path
@@ -129,7 +129,7 @@ if (Have-Cmd git) {
     if (Have-Cmd winget) {
         Install-WithWinget 'Git.Git' 'Git'
     } else {
-        Write-Step 'winget not available — falling back to direct git-scm.com installer'
+        Write-Step 'winget not available - falling back to direct git-scm.com installer'
         Install-GitDirect
     }
     Refresh-Path

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Collects diagnostic and crash information for the Media Inventory Scanner.
 
@@ -144,7 +144,7 @@ Try-Run 'Python detection' {
         if ($exe) {
             $null = $pyOut.AppendLine("--- $cmd ($($exe.Source)) ---")
             if ($exe.Source -match '\\WindowsApps\\') {
-                $null = $pyOut.AppendLine('(WindowsApps app-execution-alias stub — not a real Python.)')
+                $null = $pyOut.AppendLine('(WindowsApps app-execution-alias stub - not a real Python.)')
                 if ($cmd -eq 'python') { $stubAhead = $true }
                 continue
             }
@@ -405,7 +405,7 @@ Try-Run 'Time skew' {
             $remoteStr = $remote.ToString($isoFormat)
             Add-Content (Join-Path $reportDir '07-time.txt') "`nLocal: $localStr`nRemote (google): $remoteStr`nSkew (seconds): $skew"
             if ([math]::Abs($skew) -gt 60) {
-                Add-Summary 'FAIL' "Clock skew is $([int]$skew)s vs google.com — TLS to APIs may fail."
+                Add-Summary 'FAIL' "Clock skew is $([int]$skew)s vs google.com - TLS to APIs may fail."
             } else {
                 Add-Summary 'OK' "Clock skew $([int]$skew)s within tolerance."
             }
@@ -447,7 +447,7 @@ Try-Run 'API checks' {
     if ($reachable -eq $results.Count) {
         Add-Summary 'OK' "All $reachable lookup APIs reachable."
     } elseif ($reachable -eq 0) {
-        Add-Summary 'FAIL' 'No lookup APIs reachable — check network/firewall/proxy.'
+        Add-Summary 'FAIL' 'No lookup APIs reachable - check network/firewall/proxy.'
     } else {
         Add-Summary 'WARN' "$reachable of $($results.Count) lookup APIs reachable; partial outage or rate limit."
     }
@@ -503,7 +503,7 @@ Try-Run 'Lookup pipeline' {
 $summaryPath = Join-Path $reportDir '00-SUMMARY.txt'
 $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
 $header = @(
-    "Media Inventory Scanner — diagnostics summary"
+    "Media Inventory Scanner - diagnostics summary"
     "Generated: $generated"
     "Host: $env:COMPUTERNAME  User: $env:USERNAME"
     ('-' * 60)
