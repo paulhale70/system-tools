@@ -400,7 +400,10 @@ Try-Run 'Time skew' {
         if ($hdr) {
             $remote = [DateTimeOffset]::Parse($hdr)
             $skew = ($local - $remote).TotalSeconds
-            Add-Content (Join-Path $reportDir '07-time.txt') "`nLocal: $($local.ToString('o'))`nRemote (google): $($remote.ToString('o'))`nSkew (seconds): $skew"
+            $isoFormat = 'o'
+            $localStr  = $local.ToString($isoFormat)
+            $remoteStr = $remote.ToString($isoFormat)
+            Add-Content (Join-Path $reportDir '07-time.txt') "`nLocal: $localStr`nRemote (google): $remoteStr`nSkew (seconds): $skew"
             if ([math]::Abs($skew) -gt 60) {
                 Add-Summary 'FAIL' "Clock skew is $([int]$skew)s vs google.com — TLS to APIs may fail."
             } else {
@@ -498,9 +501,10 @@ Try-Run 'Lookup pipeline' {
 # 10. Write SUMMARY.txt and zip everything up
 # ---------------------------------------------------------------------------
 $summaryPath = Join-Path $reportDir '00-SUMMARY.txt'
+$generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
 $header = @(
     "Media Inventory Scanner — diagnostics summary"
-    "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    "Generated: $generated"
     "Host: $env:COMPUTERNAME  User: $env:USERNAME"
     ('-' * 60)
     ''
