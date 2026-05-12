@@ -80,16 +80,13 @@ function Find-AppRoot {
     return $null
 }
 
-function Invoke-PythonScript($appRoot, $code) {
-    $tmp = Join-Path $env:TEMP ("dx_" + [guid]::NewGuid().ToString('N') + '.py')
-    Set-Content -Path $tmp -Value $code -Encoding UTF8
+function Invoke-PythonScript($appRoot, $scriptPath) {
     try {
         Push-Location $appRoot
-        $out = & python $tmp 2>&1 | Out-String
+        $out = & python $scriptPath 2>&1 | Out-String
         $exit = $LASTEXITCODE
     } finally {
         Pop-Location
-        Remove-Item $tmp -ErrorAction SilentlyContinue
     }
     [PSCustomObject]@{ Output = $out; ExitCode = $exit }
 }
@@ -219,41 +216,9 @@ Try-Run 'Database info' {
     }
 
     $resolvedDb = $null
-    if ($appRoot -and (Test-Path (Join-Path $appRoot 'database.py'))) {
-        $py = @'
-import json, os, sqlite3, sys
-sys.path.insert(0, os.getcwd())
-import database
-print("RESOLVED:", database.DB_PATH)
-print("EXISTS:", os.path.exists(database.DB_PATH))
-if os.path.exists(database.DB_PATH):
-    print("SIZE:", os.path.getsize(database.DB_PATH))
-    try:
-        c = sqlite3.connect(database.DB_PATH)
-        c.row_factory = sqlite3.Row
-        print("INTEGRITY:", c.execute("PRAGMA integrity_check").fetchone()[0])
-        print("QUICK:", c.execute("PRAGMA quick_check").fetchone()[0])
-        for t in ("items", "lookup_cache"):
-            try:
-                n = c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                print(f"COUNT[{t}]:", n)
-            except Exception as e:
-                print(f"COUNT[{t}]: ERROR {e}")
-        try:
-            stats = {}
-            for cat in ("CD", "Book", "Blu-ray"):
-                stats[cat] = c.execute("SELECT COUNT(*) FROM items WHERE category = ?", (cat,)).fetchone()[0]
-            print("BY_CATEGORY:", json.dumps(stats))
-        except Exception as e:
-            print("BY_CATEGORY: ERROR", e)
-        print("--- schema ---")
-        for row in c.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL").fetchall():
-            print(row[0])
-        c.close()
-    except Exception as e:
-        print("OPEN_ERROR:", e)
-'@
-        $r = Invoke-PythonScript $appRoot $py
+    $helper = if ($appRoot) { Join-Path $appRoot '_dx_db_check.py' } else { $null }
+    if ($helper -and (Test-Path $helper) -and (Test-Path (Join-Path $appRoot 'database.py'))) {
+        $r = Invoke-PythonScript $appRoot $helper
         $null = $report.AppendLine('--- python database.py resolution ---')
         $null = $report.AppendLine($r.Output)
         if ($r.Output -match 'RESOLVED:\s*(.+)') { $resolvedDb = $Matches[1].Trim() }
@@ -511,37 +476,21 @@ Try-Run 'Processes' {
 Write-Section '9. Lookup pipeline test'
 Try-Run 'Lookup pipeline' {
     $appRoot = Find-AppRoot
-    if (-not $appRoot -or -not (Test-Path (Join-Path $appRoot 'lookup.py'))) {
-        'lookup.py not reachable from working directory; skipped.' |
+    $helper = if ($appRoot) { Join-Path $appRoot '_dx_lookup_check.py' } else { $null }
+    if ($helper -and (Test-Path $helper) -and (Test-Path (Join-Path $appRoot 'lookup.py'))) {
+        $r = Invoke-PythonScript $appRoot $helper
+        Save-Text '09-lookup.txt' $r.Output
+        if ($r.Output -match '"title"' -or $r.Output -match 'RESULT:\s*\{') {
+            Add-Summary 'OK' 'Lookup pipeline returned a result for the known-good UPC.'
+        } elseif ($r.Output -match 'ERROR:') {
+            Add-Summary 'FAIL' 'Lookup pipeline raised an exception (see 09-lookup.txt).'
+        } else {
+            Add-Summary 'WARN' 'Lookup pipeline returned no match for the known-good UPC (rate-limited?).'
+        }
+    } else {
+        'lookup.py / _dx_lookup_check.py not reachable from working directory; skipped.' |
             Set-Content (Join-Path $reportDir '09-lookup.txt')
         Add-Summary 'WARN' 'Lookup pipeline test skipped (run from project folder).'
-        return
-    }
-    $py = @'
-import json, sys, time, traceback, os
-sys.path.insert(0, os.getcwd())
-import lookup
-# Known-good UPC: Pink Floyd "Dark Side of the Moon" CD reissue.
-upc = "828766516920"
-t0 = time.time()
-try:
-    result = lookup.lookup_upc(upc)
-    elapsed = time.time() - t0
-    print("ELAPSED:", round(elapsed, 2), "s")
-    print("RESULT:", json.dumps(result, default=str, indent=2)[:2000])
-except Exception:
-    print("ELAPSED:", round(time.time() - t0, 2), "s")
-    print("ERROR:")
-    traceback.print_exc()
-'@
-    $r = Invoke-PythonScript $appRoot $py
-    Save-Text '09-lookup.txt' $r.Output
-    if ($r.Output -match '"title"' -or $r.Output -match 'RESULT:\s*\{') {
-        Add-Summary 'OK' 'Lookup pipeline returned a result for the known-good UPC.'
-    } elseif ($r.Output -match 'ERROR:') {
-        Add-Summary 'FAIL' 'Lookup pipeline raised an exception (see 09-lookup.txt).'
-    } else {
-        Add-Summary 'WARN' 'Lookup pipeline returned no match for the known-good UPC (rate-limited?).'
     }
 }
 
