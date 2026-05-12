@@ -1,0 +1,5 @@
+*.ps1   binary
+*.bat   binary
+*.cmd   binary
+*.py    text eol=lf
+*.md    text eol=lf
