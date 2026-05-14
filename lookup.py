@@ -10,8 +10,12 @@ Priority order:
   4. MusicBrainz  — CDs, 1 req/sec rate limit
 """
 
+import logging
 import time
+
 import database as _db
+
+log = logging.getLogger(__name__)
 
 try:
     import requests
@@ -59,39 +63,44 @@ def lookup_upc(upc: str) -> dict | None:
     if not upc:
         return None
 
-    # Cache check — avoids hitting APIs for repeated scans
+    log.info('Lookup start upc=%s', upc)
+
     cached = _db.cache_get(upc)
     if cached:
+        log.info('Lookup upc=%s served from cache (source=%s)',
+                 upc, cached.get('source', '?'))
         return cached
 
-    result = None
-
-    # 1) UPCitemdb — good for all categories
-    result = _upcitemdb(upc)
-    if result:
-        _db.cache_set(upc, result)
+    def _try(name, fn, *args):
+        t = time.perf_counter()
+        result = fn(*args)
+        elapsed_ms = int((time.perf_counter() - t) * 1000)
+        if result:
+            log.info('Lookup upc=%s matched via %s in %dms', upc, name, elapsed_ms)
+            _db.cache_set(upc, result)
+        else:
+            log.debug('Lookup upc=%s miss via %s in %dms', upc, name, elapsed_ms)
         return result
 
-    # 2) Google Books — ISBN-13 (starts with 978 or 979, length 13)
+    result = _try('UPCitemdb', _upcitemdb, upc)
+    if result:
+        return result
+
     if len(upc) in (10, 13) and (len(upc) == 10 or upc[:3] in ('978', '979')):
-        result = _google_books(upc)
+        result = _try('GoogleBooks', _google_books, upc)
         if result:
-            _db.cache_set(upc, result)
             return result
 
-    # 3) Open Library — another book fallback
     if len(upc) in (10, 13):
-        result = _open_library(upc)
+        result = _try('OpenLibrary', _open_library, upc)
         if result:
-            _db.cache_set(upc, result)
             return result
 
-    # 4) MusicBrainz — CD / music releases
-    result = _musicbrainz(upc)
+    result = _try('MusicBrainz', _musicbrainz, upc)
     if result:
-        _db.cache_set(upc, result)
         return result
 
+    log.info('Lookup upc=%s exhausted all sources, no match', upc)
     return None
 
 
@@ -127,9 +136,9 @@ def _upcitemdb(upc: str) -> dict | None:
                     'source':          'UPC Item DB',
                 }
         elif resp.status_code == 429:
-            print("UPCitemdb: rate limit reached (100/day on free tier)")
-    except Exception as exc:
-        print(f"UPCitemdb error: {exc}")
+            log.warning('UPCitemdb rate limit reached (100/day on free tier)')
+    except Exception:
+        log.exception('UPCitemdb request failed for upc=%s', upc)
     return None
 
 
@@ -160,8 +169,8 @@ def _google_books(isbn: str) -> dict | None:
                     'description':     info.get('description', ''),
                     'source':          'Google Books',
                 }
-    except Exception as exc:
-        print(f"Google Books error: {exc}")
+    except Exception:
+        log.exception('Google Books request failed for isbn=%s', isbn)
     return None
 
 
@@ -190,8 +199,8 @@ def _open_library(isbn: str) -> dict | None:
                     'description':     '',
                     'source':          'Open Library',
                 }
-    except Exception as exc:
-        print(f"Open Library error: {exc}")
+    except Exception:
+        log.exception('Open Library request failed for isbn=%s', isbn)
     return None
 
 
@@ -226,8 +235,8 @@ def _musicbrainz(upc: str) -> dict | None:
                     'description':     '',
                     'source':          'MusicBrainz',
                 }
-    except Exception as exc:
-        print(f"MusicBrainz error: {exc}")
+    except Exception:
+        log.exception('MusicBrainz request failed for upc=%s', upc)
     return None
 
 

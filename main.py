@@ -13,12 +13,20 @@ from tkinter import ttk, messagebox, filedialog
 import threading
 import csv
 import io
+import logging
 import os
 import shutil
+import subprocess
+import sys
 from datetime import datetime
+
+import applog
+applog.setup_logging()
 
 import database
 import lookup
+
+log = logging.getLogger('app')
 
 # ── Try optional deps ──────────────────────────────────────────────────────────
 try:
@@ -65,6 +73,8 @@ CAT_COLORS = {
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        applog.install_tk_excepthook(self)
+        log.info('App starting (db=%s)', database.DB_PATH)
         database.init_db()
 
         self.title("Media Inventory Scanner")
@@ -150,6 +160,10 @@ class App(tk.Tk):
                   bg=PANEL, fg=SUBTEXT, relief='flat',
                   padx=10, pady=5, cursor='hand2',
                   command=self._backup_db).pack(side='right', padx=(0, 6))
+        tk.Button(bar, text="View Log",
+                  bg=PANEL, fg=SUBTEXT, relief='flat',
+                  padx=10, pady=5, cursor='hand2',
+                  command=self._open_log).pack(side='right', padx=(0, 6))
 
     def _build_scan_bar(self):
         bar = tk.Frame(self, bg=PANEL)
@@ -409,11 +423,13 @@ class App(tk.Tk):
         upc = self.scan_var.get().strip()
         if not upc:
             return
+        log.info('Scan upc=%s', upc)
         valid, err = lookup.validate_barcode(upc)
         if not valid:
+            log.info('Scan upc=%s rejected: %s', upc, err)
             self._set_status(f"Invalid barcode: {err}", DANGER)
             return
-        self._set_status(f"Looking up {upc} …", WARNING)
+        self._set_status(f"Looking up {upc} ...", WARNING)
         self.scan_btn.config(state='disabled')
         self.add_btn.config(state='disabled')
         self.selected_id = None
@@ -678,7 +694,24 @@ class App(tk.Tk):
         )
         if dest:
             shutil.copy2(database.DB_PATH, dest)
+            log.info('Backup DB -> %s', dest)
             messagebox.showinfo("Backup", f"Database backed up to:\n{dest}")
+
+    def _open_log(self):
+        path = applog.LOG_PATH
+        if not os.path.exists(path):
+            messagebox.showinfo("View Log", f"No log file yet at:\n{path}")
+            return
+        try:
+            if sys.platform == 'win32':
+                os.startfile(path)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', path])
+            else:
+                subprocess.Popen(['xdg-open', path])
+        except Exception:
+            log.exception('Failed to open log file')
+            messagebox.showerror("View Log", f"Could not open:\n{path}")
 
     def _clear_detail(self):
         self.current_scan = None
@@ -734,7 +767,8 @@ class App(tk.Tk):
             w = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
             w.writeheader()
             w.writerows(items)
-        self._set_status(f"Exported {len(items)} items → {os.path.basename(path)}", SUCCESS)
+        log.info('Exported %d items to %s', len(items), path)
+        self._set_status(f"Exported {len(items)} items -> {os.path.basename(path)}", SUCCESS)
         messagebox.showinfo("Export Complete",
                             f"Exported {len(items)} items to:\n{path}")
 

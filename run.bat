@@ -17,6 +17,11 @@ if %errorlevel% neq 0 (
     pause
 )
 
+if /I "%~1"=="--debug" (
+    echo Debug logging enabled.
+    set MEDIA_INVENTORY_DEBUG=1
+)
+
 echo.
 echo Starting Media Inventory Scanner...
 python main.py

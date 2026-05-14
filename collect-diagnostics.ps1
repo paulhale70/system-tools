@@ -474,6 +474,30 @@ Try-Run 'Processes' {
 }
 
 # ---------------------------------------------------------------------------
+# 8b. Application log (set by applog.py, next to the DB)
+# ---------------------------------------------------------------------------
+Write-Section '8b. Application log'
+Try-Run 'App log' {
+    $candidates = @()
+    if ($resolvedDb) { $candidates += (Join-Path (Split-Path $resolvedDb -Parent) 'media_inventory.log') }
+    $candidates += (Join-Path $env:USERPROFILE 'media_inventory.log')
+    $logPath = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    if ($logPath) {
+        Copy-Item $logPath (Join-Path $reportDir '08-app.log') -Force
+        # Also copy any rotated backups (.log.1 .. .log.5)
+        Get-ChildItem -Path (Split-Path $logPath -Parent) -Filter 'media_inventory.log.*' -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName (Join-Path $reportDir ("08-app." + $_.Name.Split('.')[-1] + '.log')) -Force }
+        $bytes = (Get-Item $logPath).Length
+        Add-Summary 'OK' ("Captured app log ($([math]::Round($bytes/1KB,1)) KB) from $logPath")
+    } else {
+        'No media_inventory.log found alongside the DB or in %USERPROFILE%.' |
+            Set-Content (Join-Path $reportDir '08-app.log')
+        Add-Summary 'WARN' 'No application log found (app may not have been launched yet).'
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 9. End-to-end lookup pipeline test
 # ---------------------------------------------------------------------------
 Write-Section '9. Lookup pipeline test'

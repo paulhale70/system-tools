@@ -1,7 +1,10 @@
 import sqlite3
 import json
+import logging
 import os
 from datetime import datetime
+
+log = logging.getLogger(__name__)
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".media_inventory_config.json")
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), "media_inventory.db")
@@ -115,7 +118,8 @@ def add_item(item):
                     (now, upc)
                 )
                 conn.commit()
-                return False, "Item already exists — quantity incremented"
+                log.info('Incremented quantity for upc=%s (id=%s)', upc, existing['id'])
+                return False, "Item already exists - quantity incremented"
 
         conn.execute('''
             INSERT INTO items
@@ -137,7 +141,10 @@ def add_item(item):
             now,
             now,
         ))
+        new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.commit()
+        log.info('Added item id=%s upc=%s title=%r category=%s',
+                 new_id, upc or '-', item.get('title', ''), item.get('category', ''))
         return True, "Item added successfully"
 
 
@@ -179,12 +186,15 @@ def update_item(item_id, **kwargs):
     with get_connection() as conn:
         conn.execute(f"UPDATE items SET {set_clause} WHERE id = ?", values)
         conn.commit()
+    log.info('Updated item id=%s fields=%s', item_id,
+             [k for k in kwargs if k != 'updated_date'])
 
 
 def delete_item(item_id):
     with get_connection() as conn:
         conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         conn.commit()
+    log.info('Deleted item id=%s', item_id)
 
 
 def get_stats():
