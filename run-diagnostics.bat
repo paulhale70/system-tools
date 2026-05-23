@@ -25,7 +25,7 @@ echo   Downloading the latest diagnostic script...
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop'; $tmp = Join-Path $env:TEMP 'system-diagnostics.ps1'; try { Invoke-WebRequest 'https://raw.githubusercontent.com/paulhale70/System-tools/claude/powershell-diagnostic-script-Ev7P3/system-diagnostics.ps1?nc=%random%' -OutFile $tmp -UseBasicParsing; & $tmp -ProjectName ('PC-' + $env:COMPUTERNAME) } catch { Write-Host ''; Write-Host ('  ERROR: ' + $_.Exception.Message) -ForegroundColor Red; Write-Host ''; Write-Host '  Please take a screenshot of this window and send it back.' -ForegroundColor Yellow }"
+  "$ErrorActionPreference='Stop'; $tmp = Join-Path $env:TEMP 'system-diagnostics.ps1'; try { Invoke-WebRequest 'https://raw.githubusercontent.com/paulhale70/System-tools/main/system-diagnostics.ps1?nc=%random%' -OutFile $tmp -UseBasicParsing; & $tmp -ProjectName ('PC-' + $env:COMPUTERNAME) } catch { Write-Host ''; Write-Host ('  ERROR: ' + $_.Exception.Message) -ForegroundColor Red; Write-Host ''; Write-Host '  Please take a screenshot of this window and send it back.' -ForegroundColor Yellow }"
 
 echo.
 echo  ------------------------------------------------------------------
