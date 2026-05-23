@@ -3,12 +3,16 @@
     Generic Windows diagnostic collector. Project-agnostic.
 
 .DESCRIPTION
-    Gathers system info, Python and dependency state, project file
-    inventory, recent Windows Application/System event log errors,
-    Windows Error Reporting (WER) crash artifacts, and network
-    diagnostics (DNS, proxy, time skew, firewall, optional HTTP probes).
-    Writes a top-level SUMMARY.txt with green/yellow/red verdicts, then
-    zips everything for easy sharing.
+    Comprehensive Windows diagnostics in one script: system info,
+    Python state, project files + git, installed updates, event logs
+    (incl. bug-checks and app crashes), Reliability Monitor records,
+    WER + LiveKernelReports + Minidumps + MEMORY.DMP, drivers, storage
+    + SMART, memory modules, processes + services, startup items,
+    scheduled-task failures, network state (adapters, TCP, DNS client,
+    optional HTTP probes, proxy, time skew, firewall), DISM
+    CheckHealth (admin), systeminfo, and HID devices. Writes a
+    top-level SUMMARY.txt with green/yellow/red verdicts, then zips
+    the bundle for sharing.
 
     Run from a project folder:
         powershell -ExecutionPolicy Bypass -File .\system-diagnostics.ps1
@@ -32,8 +36,11 @@
     Optional list of HTTP URLs to probe for reachability.
 
 .PARAMETER WerKeywords
-    Regex of substrings to filter Report.wer files by (matches process
-    or module name). Default: 'python|pythonw'.
+    Regex to filter Report.wer files by. Default: 'python|pythonw'.
+
+.PARAMETER IncludeMiniDumps
+    Copy C:\Windows\Minidump\*.dmp into the bundle (can be large).
+    Without this flag only a listing is captured.
 
 .PARAMETER ReportDir
     Reuse an existing report folder instead of creating a new one.
@@ -45,11 +52,12 @@
 
 [CmdletBinding()]
 param(
-    [string]$OutputRoot   = [Environment]::GetFolderPath('Desktop'),
-    [int]$EventLogDays    = 7,
-    [string]$ProjectName  = 'System',
-    [string[]]$Endpoints  = @(),
-    [string]$WerKeywords  = 'python|pythonw',
+    [string]$OutputRoot       = [Environment]::GetFolderPath('Desktop'),
+    [int]$EventLogDays        = 7,
+    [string]$ProjectName      = 'System',
+    [string[]]$Endpoints      = @(),
+    [string]$WerKeywords      = 'python|pythonw',
+    [switch]$IncludeMiniDumps,
     [string]$ReportDir,
     [switch]$NoFinalize
 )
@@ -94,6 +102,12 @@ function Try-Run($label, [scriptblock]$block) {
     }
 }
 
+function Test-Elevated {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    (New-Object Security.Principal.WindowsPrincipal $id).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Find-ProjectRoot {
     if ($PSScriptRoot) {
         $dir = $PSScriptRoot
@@ -130,8 +144,8 @@ function Initialize-Report {
     $dir = Join-Path $OutputRoot "$ProjectName-Diagnostics-$timestamp"
     $null = New-Item -ItemType Directory -Path $dir -Force
 
-    $script:reportDir = $dir
-    $script:summary   = New-Object System.Collections.ArrayList
+    $script:reportDir  = $dir
+    $script:summary    = New-Object System.Collections.ArrayList
     $script:transcript = Join-Path $dir 'collector.log'
     Start-Transcript -Path $script:transcript -Append | Out-Null
     return $dir
@@ -181,9 +195,18 @@ function Invoke-SystemDiagnostics {
         [string]$ReportDir   = $script:reportDir,
         [int]$EventLogDays   = 7,
         [string[]]$Endpoints = @(),
-        [string]$WerKeywords = 'python|pythonw'
+        [string]$WerKeywords = 'python|pythonw',
+        [switch]$IncludeMiniDumps
     )
     $script:reportDir = $ReportDir
+    $since = (Get-Date).AddDays(-$EventLogDays)
+
+    $isAdmin = Test-Elevated
+    if ($isAdmin) {
+        Add-Summary 'OK' 'Running elevated.'
+    } else {
+        Add-Summary 'WARN' 'Not elevated - DISM, some event-log providers, and some WMI classes may be incomplete.'
+    }
 
     # -----------------------------------------------------------------------
     # 1. System information
@@ -195,16 +218,19 @@ function Invoke-SystemDiagnostics {
         $cpu  = Get-CimInstance Win32_Processor | Select-Object -First 1
         $bios = Get-CimInstance Win32_BIOS
 
+        $uptime = ((Get-Date) - $os.LastBootUpTime).ToString('d\.hh\:mm\:ss')
         $info = [PSCustomObject]@{
             Timestamp         = (Get-Date).ToString('o')
             ComputerName      = $env:COMPUTERNAME
-            UserName          = $env:USERNAME
+            UserName          = "$env:USERDOMAIN\$env:USERNAME"
+            Elevated          = $isAdmin
             OSCaption         = $os.Caption
             OSVersion         = $os.Version
             OSBuild           = $os.BuildNumber
             OSArchitecture    = $os.OSArchitecture
             InstallDate       = $os.InstallDate
             LastBootUpTime    = $os.LastBootUpTime
+            Uptime            = $uptime
             Manufacturer      = $cs.Manufacturer
             Model             = $cs.Model
             TotalMemoryGB     = [math]::Round($cs.TotalPhysicalMemory / 1GB, 2)
@@ -212,7 +238,9 @@ function Invoke-SystemDiagnostics {
             CPU               = $cpu.Name
             CPUCores          = $cpu.NumberOfCores
             CPULogical        = $cpu.NumberOfLogicalProcessors
+            CPUMaxClockMHz    = $cpu.MaxClockSpeed
             BIOSVersion       = $bios.SMBIOSBIOSVersion
+            BIOSReleaseDate   = $bios.ReleaseDate
             PowerShellVersion = $PSVersionTable.PSVersion.ToString()
             Culture           = (Get-Culture).Name
             TimeZone          = (Get-TimeZone).Id
@@ -270,7 +298,7 @@ function Invoke-SystemDiagnostics {
     }
 
     # -----------------------------------------------------------------------
-    # 3. Project files
+    # 3. Project files + git state
     # -----------------------------------------------------------------------
     Write-Section '3. Project files'
     Try-Run 'Project inventory' {
@@ -289,7 +317,6 @@ function Invoke-SystemDiagnostics {
             Copy-Item (Join-Path $projectRoot 'requirements.txt') (Join-Path $ReportDir '03-requirements.txt') -Force
         }
 
-        # Git state (if any)
         if (Test-Path (Join-Path $projectRoot '.git')) {
             $gitOut = New-Object System.Text.StringBuilder
             Push-Location $projectRoot
@@ -308,12 +335,21 @@ function Invoke-SystemDiagnostics {
     }
 
     # -----------------------------------------------------------------------
-    # 5. Event log errors and warnings
+    # 4. Installed updates (hotfixes)
     # -----------------------------------------------------------------------
-    Write-Section '5. Event log (Application + System)'
+    Write-Section '4. Installed updates'
+    Try-Run 'Hotfixes' {
+        Get-HotFix -ErrorAction SilentlyContinue | Sort-Object InstalledOn -Descending |
+            Select-Object HotFixID, Description, InstalledOn, InstalledBy |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '04-hotfixes.csv')
+    }
+
+    # -----------------------------------------------------------------------
+    # 5. Event logs + bug-checks + app crashes + reliability records
+    # -----------------------------------------------------------------------
+    Write-Section '5. Event logs + crashes'
     Try-Run 'Event log' {
-        $since = (Get-Date).AddDays(-$EventLogDays)
-        foreach ($log in 'Application','System') {
+        foreach ($log in 'Application','System','Setup') {
             $events = Get-WinEvent -FilterHashtable @{
                 LogName   = $log
                 Level     = 1,2,3
@@ -334,10 +370,50 @@ function Invoke-SystemDiagnostics {
         }
     }
 
+    Try-Run 'Bug-checks / BSOD' {
+        $bugchecks = Get-WinEvent -FilterHashtable @{
+            LogName  = 'System'
+            Id       = 41, 1001, 6008, 1003
+        } -ErrorAction SilentlyContinue | Where-Object { $_.TimeCreated -ge $since } |
+            Select-Object TimeCreated, Id, ProviderName, LevelDisplayName,
+                @{n='Message';e={ ($_.Message -replace '\s+',' ').Substring(0, [Math]::Min(500, $_.Message.Length)) }}
+        if ($bugchecks) {
+            $bugchecks | Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '05-bugchecks.csv')
+            Add-Summary 'WARN' ("$($bugchecks.Count) bug-check/power-loss events in the last $EventLogDays days.")
+        } else {
+            "No bug-check events in the last $EventLogDays days." |
+                Set-Content (Join-Path $ReportDir '05-bugchecks.csv')
+        }
+    }
+
+    Try-Run 'App crashes / hangs' {
+        $appcrash = Get-WinEvent -FilterHashtable @{
+            LogName      = 'Application'
+            ProviderName = 'Application Error','Windows Error Reporting','Application Hang','.NET Runtime'
+        } -ErrorAction SilentlyContinue | Where-Object { $_.TimeCreated -ge $since } |
+            Select-Object TimeCreated, Id, ProviderName, LevelDisplayName,
+                @{n='Message';e={ ($_.Message -replace '\s+',' ').Substring(0, [Math]::Min(500, $_.Message.Length)) }}
+        if ($appcrash) {
+            $appcrash | Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '05-app-crashes.csv')
+            Add-Summary 'WARN' ("$($appcrash.Count) app crash/hang events in the last $EventLogDays days.")
+        } else {
+            "No app crash/hang events in the last $EventLogDays days." |
+                Set-Content (Join-Path $ReportDir '05-app-crashes.csv')
+        }
+    }
+
+    Try-Run 'Reliability records' {
+        Get-CimInstance Win32_ReliabilityRecords -ErrorAction SilentlyContinue |
+            Where-Object { $_.TimeGenerated -ge $since } |
+            Select-Object TimeGenerated, SourceName, ProductName, EventIdentifier,
+                @{n='Message';e={ ($_.Message -replace '\s+',' ') }} |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '05-reliability.csv')
+    }
+
     # -----------------------------------------------------------------------
-    # 6. Windows Error Reporting (WER) crash artifacts
+    # 6. WER + LiveKernelReports + Minidumps + MEMORY.DMP
     # -----------------------------------------------------------------------
-    Write-Section '6. Windows Error Reporting'
+    Write-Section '6. Crash artifacts (WER, LKR, dumps)'
     Try-Run 'WER artifacts' {
         $werRoots = @(
             Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WER\ReportArchive'
@@ -345,7 +421,6 @@ function Invoke-SystemDiagnostics {
             Join-Path $env:ProgramData  'Microsoft\Windows\WER\ReportArchive'
             Join-Path $env:ProgramData  'Microsoft\Windows\WER\ReportQueue'
         )
-
         $hits = foreach ($root in $werRoots) {
             if (Test-Path $root) {
                 Get-ChildItem -Path $root -Recurse -Filter 'Report.wer' -ErrorAction SilentlyContinue |
@@ -355,7 +430,6 @@ function Invoke-SystemDiagnostics {
                     }
             }
         }
-
         if ($hits) {
             $werDir = Join-Path $ReportDir 'wer-reports'
             $null = New-Item -ItemType Directory -Path $werDir -Force
@@ -369,7 +443,21 @@ function Invoke-SystemDiagnostics {
             "No WER reports matching filter '$WerKeywords' found." |
                 Set-Content (Join-Path $ReportDir '06-wer.txt')
         }
+    }
 
+    Try-Run 'LiveKernelReports' {
+        $lkr = 'C:\Windows\LiveKernelReports'
+        if (Test-Path $lkr) {
+            Get-ChildItem $lkr -Recurse -ErrorAction SilentlyContinue |
+                Select-Object FullName, Length, LastWriteTime |
+                Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '06-livekernelreports.csv')
+        } else {
+            'LiveKernelReports directory not present.' |
+                Set-Content (Join-Path $ReportDir '06-livekernelreports.csv')
+        }
+    }
+
+    Try-Run 'Minidumps + MEMORY.DMP' {
         $dumpDirs = @(
             Join-Path $env:LOCALAPPDATA 'CrashDumps'
             'C:\Windows\Minidump'
@@ -383,20 +471,136 @@ function Invoke-SystemDiagnostics {
         if ($dumps) {
             $dumps |
                 Select-Object FullName, Length, LastWriteTime |
-                Format-Table -AutoSize | Out-String |
-                Set-Content (Join-Path $ReportDir '06-crash-dumps.txt')
+                Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '06-crash-dumps.csv')
+            if ($IncludeMiniDumps) {
+                $dest = Join-Path $ReportDir 'minidumps'
+                $null = New-Item -ItemType Directory -Path $dest -Force
+                $dumps | Copy-Item -Destination $dest -Force
+                Add-Summary 'OK' "Copied $($dumps.Count) crash dumps into the bundle."
+            } else {
+                Add-Summary 'WARN' "$($dumps.Count) crash dumps found (pass -IncludeMiniDumps to copy them)."
+            }
         } else {
             'No recent crash dumps found.' |
-                Set-Content (Join-Path $ReportDir '06-crash-dumps.txt')
+                Set-Content (Join-Path $ReportDir '06-crash-dumps.csv')
+        }
+        if (Test-Path 'C:\Windows\MEMORY.DMP') {
+            $mem = Get-Item 'C:\Windows\MEMORY.DMP'
+            "Path,SizeMB,LastWriteTime`r`n$($mem.FullName),$([math]::Round($mem.Length/1MB,1)),$($mem.LastWriteTime)" |
+                Set-Content (Join-Path $ReportDir '06-memory-dmp.csv')
+            Add-Summary 'WARN' ("C:\Windows\MEMORY.DMP present ({0:N1} MB) - indicates a recent kernel crash." -f ($mem.Length/1MB))
         }
     }
 
     # -----------------------------------------------------------------------
-    # 7. Network: DNS, proxy, time, firewall, optional HTTP probes
+    # 7. Hardware: drivers, storage, memory
     # -----------------------------------------------------------------------
-    Write-Section '7. Network diagnostics'
-    Try-Run 'DNS' {
-        # Derive hostnames from endpoint URLs.
+    Write-Section '7. Hardware: drivers, storage, memory'
+    Try-Run 'Drivers' {
+        Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue |
+            Select-Object DeviceName, Manufacturer, DriverVersion, DriverDate, IsSigned, InfName |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '07-drivers.csv')
+    }
+
+    Try-Run 'Storage / SMART' {
+        Get-PhysicalDisk -ErrorAction SilentlyContinue |
+            Select-Object FriendlyName, MediaType, BusType,
+                @{n='SizeGB';e={[math]::Round($_.Size/1GB,1)}},
+                HealthStatus, OperationalStatus, SerialNumber |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '07-physical-disks.csv')
+
+        Get-Volume -ErrorAction SilentlyContinue |
+            Select-Object DriveLetter, FileSystemLabel, FileSystem, HealthStatus,
+                @{n='SizeRemainingGB';e={[math]::Round($_.SizeRemaining/1GB,1)}},
+                @{n='SizeGB';e={[math]::Round($_.Size/1GB,1)}} |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '07-volumes.csv')
+
+        $unhealthy = Get-PhysicalDisk -ErrorAction SilentlyContinue |
+            Where-Object { $_.HealthStatus -ne 'Healthy' -and $_.HealthStatus }
+        if ($unhealthy) {
+            Add-Summary 'FAIL' ("$($unhealthy.Count) physical disk(s) not healthy: " +
+                (($unhealthy | ForEach-Object { "$($_.FriendlyName) [$($_.HealthStatus)]" }) -join '; '))
+        }
+
+        Get-StorageReliabilityCounter -PhysicalDisk (Get-PhysicalDisk -ErrorAction SilentlyContinue) -ErrorAction SilentlyContinue |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '07-smart-reliability.csv')
+    }
+
+    Try-Run 'Memory modules' {
+        Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue |
+            Select-Object Manufacturer, PartNumber,
+                @{n='CapacityGB';e={[math]::Round($_.Capacity/1GB,1)}},
+                Speed, ConfiguredClockSpeed, DeviceLocator |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '07-memory-modules.csv')
+    }
+
+    # -----------------------------------------------------------------------
+    # 8. Processes + services + startup + scheduled tasks
+    # -----------------------------------------------------------------------
+    Write-Section '8. Processes, services, startup, tasks'
+    Try-Run 'Processes' {
+        Get-Process -ErrorAction SilentlyContinue | Sort-Object WS -Descending |
+            Select-Object Id, ProcessName,
+                @{n='WS_MB';e={[math]::Round($_.WS/1MB,1)}},
+                @{n='CPU_s';e={[math]::Round($_.CPU,1)}},
+                StartTime, Path -First 200 |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '08-processes.csv')
+
+        Get-Process -Name 'python','pythonw' -ErrorAction SilentlyContinue |
+            Select-Object Id, ProcessName, StartTime,
+                @{n='WorkingSetMB';e={[math]::Round($_.WorkingSet64/1MB,1)}},
+                @{n='CPUSeconds';e={[math]::Round($_.CPU,1)}},
+                Path |
+            Format-Table -AutoSize | Out-String |
+            Set-Content (Join-Path $ReportDir '08-python-processes.txt')
+    }
+
+    Try-Run 'Services' {
+        Get-Service -ErrorAction SilentlyContinue |
+            Select-Object Name, DisplayName, Status, StartType |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '08-services.csv')
+    }
+
+    Try-Run 'Startup items' {
+        Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue |
+            Select-Object Name, Command, Location, User |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '08-startup.csv')
+    }
+
+    Try-Run 'Scheduled task failures' {
+        Get-ScheduledTask -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastTaskResult -ne 0 -and $_.LastRunTime -ge $since } |
+            Select-Object TaskName, TaskPath, LastRunTime, LastTaskResult, NumberOfMissedRuns |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '08-scheduled-task-failures.csv')
+    }
+
+    Try-Run 'HID devices' {
+        Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+            Where-Object { $_.PNPClass -eq 'HIDClass' -or $_.Name -match 'scanner|barcode|HID' } |
+            Select-Object Name, Manufacturer, Status, DeviceID |
+            Format-Table -AutoSize | Out-String |
+            Set-Content (Join-Path $ReportDir '08-hid-devices.txt')
+    }
+
+    # -----------------------------------------------------------------------
+    # 9. Network: adapters, TCP, DNS client, plus targeted probes
+    # -----------------------------------------------------------------------
+    Write-Section '9. Network diagnostics'
+    Try-Run 'IP / adapters / TCP / DNS client' {
+        Get-NetIPConfiguration -Detailed -ErrorAction SilentlyContinue |
+            Out-File (Join-Path $ReportDir '09-ipconfig.txt') -Encoding UTF8
+        Get-NetAdapter -ErrorAction SilentlyContinue |
+            Select-Object Name, InterfaceDescription, Status, LinkSpeed, MacAddress |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '09-adapters.csv')
+        Get-NetTCPConnection -ErrorAction SilentlyContinue |
+            Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '09-tcp-connections.csv')
+        Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
+            Select-Object InterfaceAlias, AddressFamily, @{n='Servers';e={ ($_.ServerAddresses -join ', ') }} |
+            Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '09-dns-client.csv')
+    }
+
+    Try-Run 'DNS for endpoints' {
         $hosts = @()
         foreach ($u in $Endpoints) {
             try { $hosts += ([Uri]$u).Host } catch {}
@@ -414,10 +618,10 @@ function Invoke-SystemDiagnostics {
         }
         if ($rows) {
             $rows | Format-Table -AutoSize -Wrap | Out-String |
-                Set-Content (Join-Path $ReportDir '07-dns.txt')
+                Set-Content (Join-Path $ReportDir '09-dns-endpoints.txt')
         } else {
-            'No endpoints supplied; DNS section skipped.' |
-                Set-Content (Join-Path $ReportDir '07-dns.txt')
+            'No endpoints supplied; endpoint-DNS section skipped.' |
+                Set-Content (Join-Path $ReportDir '09-dns-endpoints.txt')
         }
     }
 
@@ -442,12 +646,12 @@ function Invoke-SystemDiagnostics {
         } catch {
             $null = $sb.AppendLine("(could not read: $($_.Exception.Message))")
         }
-        Save-Text '07-proxy.txt' $sb.ToString()
+        Save-Text '09-proxy.txt' $sb.ToString()
     }
 
     Try-Run 'Time skew' {
         $out = & w32tm /query /status 2>&1 | Out-String
-        Save-Text '07-time.txt' $out
+        Save-Text '09-time.txt' $out
         $local = [DateTimeOffset]::UtcNow
         try {
             $hdr = (Invoke-WebRequest 'https://www.google.com' -UseBasicParsing -TimeoutSec 8 -Method Head).Headers['Date']
@@ -457,7 +661,7 @@ function Invoke-SystemDiagnostics {
                 $isoFormat = 'o'
                 $localStr  = $local.ToString($isoFormat)
                 $remoteStr = $remote.ToString($isoFormat)
-                Add-Content (Join-Path $ReportDir '07-time.txt') "`nLocal: $localStr`nRemote (google): $remoteStr`nSkew (seconds): $skew"
+                Add-Content (Join-Path $ReportDir '09-time.txt') "`nLocal: $localStr`nRemote (google): $remoteStr`nSkew (seconds): $skew"
                 if ([math]::Abs($skew) -gt 60) {
                     Add-Summary 'FAIL' "Clock skew is $([int]$skew)s vs google.com - TLS may fail."
                 } else {
@@ -465,7 +669,7 @@ function Invoke-SystemDiagnostics {
                 }
             }
         } catch {
-            Add-Content (Join-Path $ReportDir '07-time.txt') "`nSkew check failed: $($_.Exception.Message)"
+            Add-Content (Join-Path $ReportDir '09-time.txt') "`nSkew check failed: $($_.Exception.Message)"
         }
     }
 
@@ -473,7 +677,7 @@ function Invoke-SystemDiagnostics {
         Get-NetFirewallProfile -ErrorAction SilentlyContinue |
             Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction |
             Format-Table -AutoSize | Out-String |
-            Set-Content (Join-Path $ReportDir '07-firewall.txt')
+            Set-Content (Join-Path $ReportDir '09-firewall.txt')
     }
 
     if ($Endpoints -and $Endpoints.Count -gt 0) {
@@ -490,7 +694,7 @@ function Invoke-SystemDiagnostics {
                 }
             }
             $results | Format-Table -AutoSize -Wrap | Out-String |
-                Set-Content (Join-Path $ReportDir '07-http-probes.txt')
+                Set-Content (Join-Path $ReportDir '09-http-probes.txt')
 
             $reachable = ($results | Where-Object { $_.Status }).Count
             if ($reachable -eq $results.Count) {
@@ -504,28 +708,31 @@ function Invoke-SystemDiagnostics {
     }
 
     # -----------------------------------------------------------------------
-    # 8. Running Python processes + USB HID devices
+    # 10. System health: DISM CheckHealth (admin), systeminfo
     # -----------------------------------------------------------------------
-    Write-Section '8. Processes + USB HID devices'
-    Try-Run 'Processes' {
-        Get-Process -Name 'python','pythonw' -ErrorAction SilentlyContinue |
-            Select-Object Id, ProcessName, StartTime,
-                @{n='WorkingSetMB';e={[math]::Round($_.WorkingSet64/1MB,1)}},
-                @{n='CPUSeconds';e={[math]::Round($_.CPU,1)}},
-                Path |
-            Format-Table -AutoSize | Out-String |
-            Set-Content (Join-Path $ReportDir '08-python-processes.txt')
+    Write-Section '10. System health'
+    if ($isAdmin) {
+        Try-Run 'DISM CheckHealth' {
+            $dism = & DISM.exe /Online /Cleanup-Image /CheckHealth 2>&1
+            Save-Text '10-dism-checkhealth.txt' ($dism -join "`r`n")
+            if ($dism -match 'No component store corruption detected') {
+                Add-Summary 'OK' 'DISM: no component store corruption.'
+            } elseif ($dism -match 'repairable|corruption') {
+                Add-Summary 'WARN' 'DISM reports component store issues - run /ScanHealth /RestoreHealth.'
+            }
+        }
+    } else {
+        'DISM CheckHealth skipped (requires elevation).' |
+            Set-Content (Join-Path $ReportDir '10-dism-checkhealth.txt')
+    }
 
-        Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
-            Where-Object { $_.PNPClass -eq 'HIDClass' -or $_.Name -match 'scanner|barcode|HID' } |
-            Select-Object Name, Manufacturer, Status, DeviceID |
-            Format-Table -AutoSize | Out-String |
-            Set-Content (Join-Path $ReportDir '08-hid-devices.txt')
+    Try-Run 'systeminfo' {
+        & systeminfo.exe 2>&1 | Out-File (Join-Path $ReportDir '10-systeminfo.txt') -Encoding UTF8
     }
 }
 
 # ---------------------------------------------------------------------------
-# Standalone entry point. Skipped when dot-sourced ($MyInvocation.InvocationName -eq '.').
+# Standalone entry point. Skipped when dot-sourced.
 # ---------------------------------------------------------------------------
 
 if ($MyInvocation.InvocationName -ne '.') {
@@ -536,7 +743,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         if (-not $script:summary) { $script:summary = New-Object System.Collections.ArrayList }
     }
     Invoke-SystemDiagnostics -ReportDir $ReportDir -EventLogDays $EventLogDays `
-        -Endpoints $Endpoints -WerKeywords $WerKeywords
+        -Endpoints $Endpoints -WerKeywords $WerKeywords -IncludeMiniDumps:$IncludeMiniDumps
     if (-not $NoFinalize) {
         Finalize-Report -ReportDir $ReportDir
     }
