@@ -161,4 +161,4 @@ Try-Run 'Lookup pipeline' {
     }
 }
 
-Finalize-Report -ReportDir $reportDir -Sanitize:$Sanitize
+Finalize-Report -ReportDir $reportDir -Project 'MediaInventory' -Sanitize:$Sanitize

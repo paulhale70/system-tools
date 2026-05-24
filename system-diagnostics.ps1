@@ -76,15 +76,30 @@ param(
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
+$script:TOOL_NAME    = 'System-tools diagnostics'
+$script:TOOL_VERSION = '1.0.0'
+$script:HISTORY_PATH = Join-Path $env:USERPROFILE 'diagnostics-history.json'
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+function Write-Banner {
+    param([string]$ProjectName)
+    Write-Host ''
+    Write-Host ('  ' + $script:TOOL_NAME + '  v' + $script:TOOL_VERSION) -ForegroundColor Cyan
+    Write-Host ('  ' + ('-' * 60))
+    Write-Host ("  Project   : $ProjectName")
+    Write-Host ("  Host      : $env:COMPUTERNAME  (user $env:USERNAME)")
+    Write-Host ("  Started   : " + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))
+    Write-Host ''
+}
+
 function Write-Section($title) {
     Write-Host ''
-    Write-Host ('=' * 70)
-    Write-Host $title
-    Write-Host ('=' * 70)
+    Write-Host ('-' * 70) -ForegroundColor DarkGray
+    Write-Host ("  " + $title) -ForegroundColor Cyan
+    Write-Host ('-' * 70) -ForegroundColor DarkGray
 }
 
 function Save-Text($name, $content) {
@@ -199,24 +214,78 @@ function Invoke-Sanitize {
 }
 
 function Write-HtmlReport {
-    param([string]$Dir, [string]$Title = 'Diagnostics Report', [string[]]$Fixes = @())
+    param(
+        [string]$Dir,
+        [string]$Title    = 'Diagnostics Report',
+        [string[]]$Fixes  = @(),
+        [string]$Project  = 'System',
+        $Trends           = $null
+    )
+
+    Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+    function Esc($s) { [System.Web.HttpUtility]::HtmlEncode([string]$s) }
 
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $okCount = 0; $warnCount = 0; $failCount = 0
+    foreach ($s in $script:summary) {
+        if     ($s -match '^\[OK\]')   { $okCount   += 1 }
+        elseif ($s -match '^\[WARN\]') { $warnCount += 1 }
+        elseif ($s -match '^\[FAIL\]') { $failCount += 1 }
+    }
+    $fileCount = (Get-ChildItem $Dir -File -ErrorAction SilentlyContinue).Count
 
     $rows = foreach ($line in $script:summary) {
         $level = ($line -split ' ',2)[0] -replace '\[|\]',''
         $msg   = ($line -split ' ',2)[1]
         $cls = switch ($level) { 'OK' {'ok'} 'WARN' {'warn'} 'FAIL' {'fail'} default {'info'} }
-        "<tr class='$cls'><td class='lvl'>$level</td><td>$([System.Web.HttpUtility]::HtmlEncode($msg))</td></tr>"
+        "<tr><td><span class='pill $cls'>$level</span></td><td>$(Esc $msg)</td></tr>"
     }
-    $rowsHtml = $rows -join ''
-    $verdictTable = "<table class='verdicts'><thead><tr><th>Level</th><th>Finding</th></tr></thead><tbody>$rowsHtml</tbody></table>"
+    $verdictTable = "<table><thead><tr><th style='width:90px'>Level</th><th>Finding</th></tr></thead><tbody>" + ($rows -join '') + "</tbody></table>"
 
     $fixesHtml = if ($Fixes.Count -gt 0) {
-        $items = ($Fixes | ForEach-Object { '<li>' + [System.Web.HttpUtility]::HtmlEncode($_) + '</li>' }) -join ''
-        "<details open><summary><b>Likely fixes ($($Fixes.Count))</b></summary><ul class='fixes'>$items</ul></details>"
+        $items = ($Fixes | ForEach-Object { '<li>' + (Esc $_) + '</li>' }) -join ''
+        "<ol class='fixes'>$items</ol>"
     } else {
-        '<p class="muted">No likely-fix matches.</p>'
+        '<p class="muted">No likely-fix patterns matched.</p>'
+    }
+
+    $trendsHtml = if ($Trends -and $Trends.Total -gt 0) {
+        $sb = New-Object System.Text.StringBuilder
+        $null = $sb.AppendLine("<p class='muted'>Based on $($Trends.Total) recorded run(s) for this project on this host.</p>")
+        if ($Trends.NewVerdicts.Count -gt 0) {
+            $null = $sb.AppendLine("<details open><summary><b>New since previous run ($($Trends.NewVerdicts.Count))</b></summary><ul>")
+            foreach ($v in $Trends.NewVerdicts) { $null = $sb.AppendLine('<li>' + (Esc $v) + '</li>') }
+            $null = $sb.AppendLine('</ul></details>')
+        }
+        if ($Trends.ResolvedVerdicts.Count -gt 0) {
+            $null = $sb.AppendLine("<details><summary><b>Resolved since previous run ($($Trends.ResolvedVerdicts.Count))</b></summary><ul>")
+            foreach ($v in $Trends.ResolvedVerdicts) { $null = $sb.AppendLine('<li>' + (Esc $v) + '</li>') }
+            $null = $sb.AppendLine('</ul></details>')
+        }
+        if ($Trends.Recurring.Count -gt 0) {
+            $null = $sb.AppendLine("<details open><summary><b>Recurring (>=3 of last $($Trends.Recurring[0].Window) runs)</b></summary><table>")
+            $null = $sb.AppendLine('<thead><tr><th style="width:90px">Seen</th><th>Verdict</th></tr></thead><tbody>')
+            foreach ($r in $Trends.Recurring) {
+                $null = $sb.AppendLine("<tr><td><span class='pill warn'>" + (Esc ("{0}x" -f $r.Count)) + "</span></td><td>" + (Esc $r.Verdict) + "</td></tr>")
+            }
+            $null = $sb.AppendLine('</tbody></table></details>')
+        }
+        if ($Trends.CountsTrend.Count -gt 1) {
+            $okSeq   = ($Trends.CountsTrend | ForEach-Object { $_.OK })   -join ', '
+            $warnSeq = ($Trends.CountsTrend | ForEach-Object { $_.WARN }) -join ', '
+            $failSeq = ($Trends.CountsTrend | ForEach-Object { $_.FAIL }) -join ', '
+            $null = $sb.AppendLine("<details><summary><b>Counts over last $($Trends.CountsTrend.Count) runs</b></summary>")
+            $null = $sb.AppendLine("<table><tbody>")
+            $null = $sb.AppendLine("<tr><td><span class='pill ok'>OK</span></td><td class='trend'>$(Esc $okSeq)</td></tr>")
+            $null = $sb.AppendLine("<tr><td><span class='pill warn'>WARN</span></td><td class='trend'>$(Esc $warnSeq)</td></tr>")
+            $null = $sb.AppendLine("<tr><td><span class='pill fail'>FAIL</span></td><td class='trend'>$(Esc $failSeq)</td></tr>")
+            $null = $sb.AppendLine("</tbody></table></details>")
+        }
+        $sb.ToString()
+    } elseif ($Trends -and $Trends.Total -eq 1) {
+        '<p class="muted">First recorded run for this project on this host. Run again to see trends.</p>'
+    } else {
+        '<p class="muted">No history available.</p>'
     }
 
     $fileLinks = Get-ChildItem -Path $Dir -File -ErrorAction SilentlyContinue |
@@ -225,46 +294,243 @@ function Write-HtmlReport {
         ForEach-Object {
             $name = $_.Name
             $size = if ($_.Length -gt 1KB) { "$([math]::Round($_.Length/1KB,1)) KB" } else { "$($_.Length) B" }
-            "<li><a href='$name'>$name</a> <span class='muted'>$size</span></li>"
+            "<li><a href='$(Esc $name)'>$(Esc $name)</a> <span class='muted'>$size</span></li>"
         }
-    $fileCount = (Get-ChildItem $Dir -File).Count
-    $fileLinksHtml = $fileLinks -join ''
-    $fileList = "<details><summary><b>All collected files ($fileCount)</b></summary><ul>$fileLinksHtml</ul></details>"
-
-    Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+    $fileList = '<ul class="files">' + ($fileLinks -join '') + '</ul>'
 
     $css = @'
-body { font: 14px/1.5 -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; }
-h1 { margin: 0 0 4px; font-size: 22px; }
-.subtitle { color: #666; margin-bottom: 24px; }
-table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
-th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top; }
-th { background: #f4f4f6; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #555; }
-td.lvl { font-weight: 600; width: 80px; }
-tr.ok td.lvl   { color: #138a36; }
-tr.warn td.lvl { color: #a06200; }
-tr.fail td.lvl { color: #b3261e; }
-ul.fixes li { margin-bottom: 6px; }
-details { background: #fafafa; border: 1px solid #e5e5ea; border-radius: 6px; padding: 10px 14px; margin: 10px 0; }
-details summary { cursor: pointer; outline: none; }
-.muted { color: #888; font-size: 12px; }
+:root {
+  --bg:#ffffff; --panel:#f9fafb; --border:#e5e7eb; --text:#111827; --muted:#6b7280;
+  --ok:#15803d; --warn:#b45309; --fail:#b91c1c; --accent:#4f46e5;
+}
+* { box-sizing: border-box; }
+body { font: 14px/1.55 -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+       max-width: 1100px; margin: 0 auto; padding: 32px 24px 64px; color: var(--text); background: var(--bg); }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 20px; }
+header .brand { font-size: 12px; color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+header h1 { margin: 4px 0 0; font-size: 24px; font-weight: 600; }
+header .subtitle { color: var(--muted); margin-top: 6px; font-size: 13px; }
+nav.toc { display: flex; gap: 14px; font-size: 12px; margin: 12px 0 20px; padding: 8px 12px;
+          background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+nav.toc a { color: var(--accent); text-decoration: none; font-weight: 500; }
+nav.toc a:hover { text-decoration: underline; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+         gap: 10px; margin: 0 0 24px; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
+.stat .num { font-size: 26px; font-weight: 600; line-height: 1.1; }
+.stat .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+.stat.ok   .num { color: var(--ok); }
+.stat.warn .num { color: var(--warn); }
+.stat.fail .num { color: var(--fail); }
+section { margin-bottom: 28px; }
+section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); margin: 0 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px;
+        font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.pill.ok   { background: #dcfce7; color: var(--ok); }
+.pill.warn { background: #fef3c7; color: var(--warn); }
+.pill.fail { background: #fee2e2; color: var(--fail); }
+.pill.info { background: var(--panel); color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--panel); font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+     color: var(--muted); font-weight: 500; }
+ol.fixes, ul.files { padding-left: 20px; }
+ol.fixes li { margin-bottom: 8px; }
+ul.files { columns: 2; column-gap: 20px; padding: 0; list-style: none; }
+ul.files li { break-inside: avoid; padding: 2px 0; }
+details { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+          padding: 10px 14px; margin: 8px 0; }
+details summary { cursor: pointer; outline: none; font-weight: 500; }
+details > * + * { margin-top: 8px; }
+.muted { color: var(--muted); font-size: 12px; }
+.trend { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--muted); }
+footer { color: var(--muted); font-size: 11px; margin-top: 36px; text-align: center;
+         border-top: 1px solid var(--border); padding-top: 12px; }
 '@
 
     $html = @"
 <!DOCTYPE html>
-<html><head><meta charset='utf-8'><title>$Title</title><style>$css</style></head>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>$(Esc $Title)</title>
+<style>$css</style>
+</head>
 <body>
-<h1>$Title</h1>
-<div class='subtitle'>Generated $generated on host $env:COMPUTERNAME (user $env:USERNAME).</div>
-<h2>Likely fixes</h2>
-$fixesHtml
-<h2>Verdicts</h2>
-$verdictTable
-<h2>Files</h2>
-$fileList
+<header>
+  <div class='brand'>$(Esc $script:TOOL_NAME) &middot; v$($script:TOOL_VERSION)</div>
+  <h1>$(Esc $Title)</h1>
+  <div class='subtitle'>$(Esc $generated) &middot; host <b>$(Esc $env:COMPUTERNAME)</b> &middot; user <b>$(Esc $env:USERNAME)</b> &middot; project <b>$(Esc $Project)</b></div>
+</header>
+<nav class='toc'>
+  <a href='#fixes'>Likely fixes</a>
+  <a href='#trends'>Trends</a>
+  <a href='#verdicts'>Verdicts</a>
+  <a href='#files'>Files ($fileCount)</a>
+</nav>
+<section class='stats'>
+  <div class='stat ok'><div class='num'>$okCount</div><div class='lbl'>OK</div></div>
+  <div class='stat warn'><div class='num'>$warnCount</div><div class='lbl'>Warnings</div></div>
+  <div class='stat fail'><div class='num'>$failCount</div><div class='lbl'>Failures</div></div>
+  <div class='stat'><div class='num'>$fileCount</div><div class='lbl'>Files</div></div>
+</section>
+<section id='fixes'>
+  <h2>Likely fixes</h2>
+  $fixesHtml
+</section>
+<section id='trends'>
+  <h2>Trends</h2>
+  $trendsHtml
+</section>
+<section id='verdicts'>
+  <h2>All verdicts ($($script:summary.Count))</h2>
+  $verdictTable
+</section>
+<section id='files'>
+  <h2>Collected files</h2>
+  $fileList
+</section>
+<footer>$(Esc $script:TOOL_NAME) v$($script:TOOL_VERSION) &middot; $(Esc $generated)</footer>
 </body></html>
 "@
     $html | Set-Content -Path (Join-Path $Dir '00-summary.html') -Encoding UTF8
+}
+
+function Save-RunHistory {
+    param(
+        [string]$Project,
+        [string]$ReportDir,
+        [string[]]$Summary
+    )
+    $counts = @{ OK = 0; WARN = 0; FAIL = 0 }
+    foreach ($s in $Summary) {
+        if ($s -match '^\[(OK|WARN|FAIL)\]') { $counts[$Matches[1]] += 1 }
+    }
+    $entry = [PSCustomObject]@{
+        ts        = (Get-Date).ToString('o')
+        host      = $env:COMPUTERNAME
+        project   = $Project
+        version   = $script:TOOL_VERSION
+        reportDir = $ReportDir
+        counts    = $counts
+        verdicts  = @($Summary)
+    }
+    $history = @()
+    if (Test-Path $script:HISTORY_PATH) {
+        try {
+            $raw = Get-Content $script:HISTORY_PATH -Raw -ErrorAction Stop
+            $loaded = $raw | ConvertFrom-Json
+            if ($loaded) { $history = @($loaded) }
+        } catch {}
+    }
+    $history += $entry
+    if ($history.Count -gt 100) {
+        $history = $history[($history.Count - 100)..($history.Count - 1)]
+    }
+    $history | ConvertTo-Json -Depth 6 | Set-Content -Path $script:HISTORY_PATH -Encoding UTF8
+    return $entry
+}
+
+function Get-RunTrends {
+    param(
+        [string]$Project,
+        [string]$Host = $env:COMPUTERNAME
+    )
+    if (-not (Test-Path $script:HISTORY_PATH)) { return $null }
+    try {
+        $raw = Get-Content $script:HISTORY_PATH -Raw -ErrorAction Stop
+        $history = @($raw | ConvertFrom-Json)
+    } catch { return $null }
+
+    $relevant = @($history | Where-Object { $_.host -eq $Host -and $_.project -eq $Project })
+    if ($relevant.Count -lt 2) {
+        return [PSCustomObject]@{
+            Total       = $relevant.Count
+            FirstRun    = if ($relevant.Count -gt 0) { $relevant[0].ts } else { $null }
+            LastRun     = if ($relevant.Count -gt 0) { $relevant[-1].ts } else { $null }
+            CountsTrend = @()
+            NewVerdicts      = @()
+            ResolvedVerdicts = @()
+            Recurring        = @()
+        }
+    }
+
+    $current  = $relevant[-1]
+    $previous = $relevant[-2]
+    $curVerdicts = @($current.verdicts)
+    $prevVerdicts = @($previous.verdicts)
+
+    $newV      = $curVerdicts | Where-Object { $prevVerdicts -notcontains $_ }
+    $resolvedV = $prevVerdicts | Where-Object { $curVerdicts -notcontains $_ }
+
+    # Recurring: appears in at least 3 of last 5 runs.
+    $lookback = [Math]::Min(5, $relevant.Count)
+    $window = $relevant[-$lookback..-1]
+    $tally = @{}
+    foreach ($run in $window) {
+        foreach ($v in $run.verdicts) {
+            if ($v -match '^\[(WARN|FAIL)\]') {
+                if (-not $tally.ContainsKey($v)) { $tally[$v] = 0 }
+                $tally[$v] += 1
+            }
+        }
+    }
+    $recurring = $tally.GetEnumerator() | Where-Object { $_.Value -ge 3 } |
+                 Sort-Object Value -Descending |
+                 ForEach-Object { [PSCustomObject]@{ Verdict = $_.Key; Count = $_.Value; Window = $lookback } }
+
+    # Counts trend over last 10 runs.
+    $countsWindow = $relevant[-([Math]::Min(10, $relevant.Count))..-1]
+    $countsTrend = foreach ($r in $countsWindow) {
+        [PSCustomObject]@{
+            ts   = $r.ts
+            OK   = [int]$r.counts.OK
+            WARN = [int]$r.counts.WARN
+            FAIL = [int]$r.counts.FAIL
+        }
+    }
+
+    return [PSCustomObject]@{
+        Total            = $relevant.Count
+        FirstRun         = $relevant[0].ts
+        LastRun          = $current.ts
+        CountsTrend      = @($countsTrend)
+        NewVerdicts      = @($newV)
+        ResolvedVerdicts = @($resolvedV)
+        Recurring        = @($recurring)
+    }
+}
+
+function Format-TrendsText {
+    param($Trends)
+    if (-not $Trends -or $Trends.Total -le 0) { return '' }
+    $lines = @()
+    $lines += "Trends (host=$env:COMPUTERNAME):"
+    $lines += "  Total recorded runs: $($Trends.Total)  (first: $($Trends.FirstRun))"
+    if ($Trends.NewVerdicts.Count -gt 0) {
+        $lines += "  New since previous run ($($Trends.NewVerdicts.Count)):"
+        foreach ($v in $Trends.NewVerdicts) { $lines += "    + $v" }
+    }
+    if ($Trends.ResolvedVerdicts.Count -gt 0) {
+        $lines += "  Resolved since previous run ($($Trends.ResolvedVerdicts.Count)):"
+        foreach ($v in $Trends.ResolvedVerdicts) { $lines += "    - $v" }
+    }
+    if ($Trends.Recurring.Count -gt 0) {
+        $lines += "  Recurring (>=3 of last $($Trends.Recurring[0].Window) runs):"
+        foreach ($r in $Trends.Recurring) { $lines += ("    {0}x  {1}" -f $r.Count, $r.Verdict) }
+    }
+    if ($Trends.CountsTrend.Count -gt 1) {
+        $okSeq   = ($Trends.CountsTrend | ForEach-Object { $_.OK })   -join ','
+        $warnSeq = ($Trends.CountsTrend | ForEach-Object { $_.WARN }) -join ','
+        $failSeq = ($Trends.CountsTrend | ForEach-Object { $_.FAIL }) -join ','
+        $lines += "  Counts last $($Trends.CountsTrend.Count) runs:"
+        $lines += "    OK   : $okSeq"
+        $lines += "    WARN : $warnSeq"
+        $lines += "    FAIL : $failSeq"
+    }
+    return ($lines -join "`r`n")
 }
 
 function Initialize-Report {
@@ -280,12 +546,15 @@ function Initialize-Report {
     $script:summary    = New-Object System.Collections.ArrayList
     $script:transcript = Join-Path $dir 'collector.log'
     Start-Transcript -Path $script:transcript -Append | Out-Null
+
+    Write-Banner -ProjectName $ProjectName
     return $dir
 }
 
 function Finalize-Report {
     param(
         [string]$ReportDir = $script:reportDir,
+        [string]$Project   = 'System',
         [switch]$Sanitize
     )
 
@@ -294,10 +563,14 @@ function Finalize-Report {
 
     $likelyFixes = Get-LikelyFixes -SummaryLines $script:summary
 
+    # Persist run, then compute trends from full history (incl. this run).
+    [void](Save-RunHistory -Project $Project -ReportDir $ReportDir -Summary $script:summary)
+    $trends = Get-RunTrends -Project $Project
+
     $header = @(
-        "Diagnostics summary"
-        "Generated: $generated"
-        "Host: $env:COMPUTERNAME  User: $env:USERNAME"
+        ("$($script:TOOL_NAME)  v$($script:TOOL_VERSION)")
+        ("Generated: $generated")
+        ("Host: $env:COMPUTERNAME  User: $env:USERNAME  Project: $Project")
         ('-' * 60)
         ''
     )
@@ -313,34 +586,57 @@ function Finalize-Report {
         }
     }
 
-    ($header + $counts + $fixBlock + '' + ($script:summary | Sort-Object)) -join "`r`n" |
+    $trendBlock = @()
+    $trendsText = Format-TrendsText -Trends $trends
+    if ($trendsText) {
+        $trendBlock += ''
+        $trendBlock += $trendsText
+    }
+
+    ($header + $counts + $fixBlock + $trendBlock + '' + ($script:summary | Sort-Object)) -join "`r`n" |
         Set-Content $summaryPath -Encoding UTF8
 
-    Write-HtmlReport -Dir $ReportDir -Title "Diagnostics: $env:COMPUTERNAME" -Fixes $likelyFixes
+    Write-HtmlReport -Dir $ReportDir -Title "Diagnostics: $env:COMPUTERNAME" `
+        -Fixes $likelyFixes -Project $Project -Trends $trends
 
     Stop-Transcript | Out-Null
 
     if ($Sanitize) {
         Write-Host ''
-        Write-Host 'Sanitizing report (redacting username, hostname, MACs, private IPs)...' -ForegroundColor Yellow
+        Write-Host '  Sanitizing report (redacting username, hostname, MACs, private IPs)...' -ForegroundColor Yellow
         Invoke-Sanitize -Dir $ReportDir
     }
 
     $zipPath = "$ReportDir.zip"
     Compress-Archive -Path (Join-Path $ReportDir '*') -DestinationPath $zipPath -Force -CompressionLevel Optimal
 
+    $okCount = 0; $warnCount = 0; $failCount = 0
+    foreach ($s in $script:summary) {
+        if     ($s -match '^\[OK\]')   { $okCount   += 1 }
+        elseif ($s -match '^\[WARN\]') { $warnCount += 1 }
+        elseif ($s -match '^\[FAIL\]') { $failCount += 1 }
+    }
+
     Write-Host ''
-    Write-Host 'Diagnostics collected:' -ForegroundColor Green
-    Write-Host "  Folder: $ReportDir"
-    $htmlReport = Join-Path $ReportDir '00-summary.html'
-    Write-Host "  Report: $htmlReport"
-    Write-Host "  Zip:    $zipPath"
+    Write-Host ('=' * 70) -ForegroundColor DarkGray
+    Write-Host '  Done.' -ForegroundColor Green
+    Write-Host ('=' * 70) -ForegroundColor DarkGray
+    Write-Host ("  OK   : {0,4}" -f $okCount)   -ForegroundColor Green
+    Write-Host ("  WARN : {0,4}" -f $warnCount) -ForegroundColor Yellow
+    Write-Host ("  FAIL : {0,4}" -f $failCount) -ForegroundColor Red
     Write-Host ''
-    Write-Host 'Top-level verdicts:'
-    Get-Content $summaryPath | Select-Object -First 50 | ForEach-Object { Write-Host "  $_" }
+    $htmlOut = Join-Path $ReportDir '00-summary.html'
+    Write-Host "  Report : $htmlOut"
+    Write-Host "  Folder : $ReportDir"
+    Write-Host "  Zip    : $zipPath"
+    if ($trends -and $trends.Total -gt 1) {
+        Write-Host ("  Trends : $($trends.Total) run(s) recorded for this project")
+    }
+    Write-Host ''
 
     if (-not $env:CI) {
-        Try-Run 'Open report' { Start-Process (Join-Path $ReportDir '00-summary.html') }
+        $htmlPath = Join-Path $ReportDir '00-summary.html'
+        Try-Run 'Open report' { Start-Process $htmlPath }
     }
 }
 
@@ -1014,6 +1310,6 @@ if ($MyInvocation.InvocationName -ne '.') {
         -Endpoints $Endpoints -WerKeywords $WerKeywords -IncludeMiniDumps:$IncludeMiniDumps `
         -CaptureNetSeconds $CaptureNetSeconds
     if (-not $NoFinalize) {
-        Finalize-Report -ReportDir $ReportDir -Sanitize:$Sanitize
+        Finalize-Report -ReportDir $ReportDir -Project $ProjectName -Sanitize:$Sanitize
     }
 }
