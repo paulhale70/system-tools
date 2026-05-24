@@ -25,7 +25,7 @@ and track trends across past runs so recurring problems become obvious.
 
 ```powershell
 git clone https://github.com/paulhale70/System-tools.git
-cd System-tools
+cd System-tools\diagnostics
 .\system-diagnostics.ps1
 ```
 
