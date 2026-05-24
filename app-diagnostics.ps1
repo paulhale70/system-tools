@@ -17,12 +17,17 @@
 
 .PARAMETER EventLogDays
     Days of Application/System event log entries to collect. Default: 7.
+
+.PARAMETER Sanitize
+    Redact PII from text files before zipping. Useful when sharing the
+    report outside your team.
 #>
 
 [CmdletBinding()]
 param(
     [string]$OutputRoot  = [Environment]::GetFolderPath('Desktop'),
-    [int]$EventLogDays   = 7
+    [int]$EventLogDays   = 7,
+    [switch]$Sanitize
 )
 
 $ErrorActionPreference = 'Continue'
@@ -156,4 +161,4 @@ Try-Run 'Lookup pipeline' {
     }
 }
 
-Finalize-Report -ReportDir $reportDir
+Finalize-Report -ReportDir $reportDir -Sanitize:$Sanitize

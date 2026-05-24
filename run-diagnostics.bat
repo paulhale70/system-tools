@@ -31,7 +31,11 @@ echo.
 echo  ------------------------------------------------------------------
 echo    All done. Look on your Desktop for the zip file:
 echo       PC-^<your-pc-name^>-Diagnostics-^<date^>.zip
-echo    Email that zip file to the person who sent you this tool.
 echo  ------------------------------------------------------------------
+echo.
+choice /M "Open your email program now (we'll copy the zip path to the clipboard so you can paste/drag it as an attachment)"
+if errorlevel 2 goto end
+powershell -NoProfile -Command "$zip = Get-ChildItem $env:USERPROFILE\Desktop -Filter 'PC-*-Diagnostics-*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($zip) { Set-Clipboard -Value $zip.FullName; Write-Host ('Copied to clipboard: ' + $zip.FullName) -ForegroundColor Green; Start-Process 'mailto:?subject=Diagnostics%%20from%%20' -ArgumentList ($env:COMPUTERNAME) }"
+:end
 echo.
 pause

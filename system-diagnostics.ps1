@@ -42,6 +42,15 @@
     Copy C:\Windows\Minidump\*.dmp into the bundle (can be large).
     Without this flag only a listing is captured.
 
+.PARAMETER CaptureNetSeconds
+    Run 'netsh trace' for the given number of seconds and bundle the
+    resulting .etl. Off when 0 (default). Requires elevation.
+
+.PARAMETER Sanitize
+    Redact obvious PII (username, computer name, MAC addresses, private
+    IPs, user profile path) from all text files before zipping. Useful
+    when sharing the report outside your team.
+
 .PARAMETER ReportDir
     Reuse an existing report folder instead of creating a new one.
 
@@ -52,12 +61,14 @@
 
 [CmdletBinding()]
 param(
-    [string]$OutputRoot       = [Environment]::GetFolderPath('Desktop'),
-    [int]$EventLogDays        = 7,
-    [string]$ProjectName      = 'System',
-    [string[]]$Endpoints      = @(),
-    [string]$WerKeywords      = 'python|pythonw',
+    [string]$OutputRoot        = [Environment]::GetFolderPath('Desktop'),
+    [int]$EventLogDays         = 7,
+    [string]$ProjectName       = 'System',
+    [string[]]$Endpoints       = @(),
+    [string]$WerKeywords       = 'python|pythonw',
     [switch]$IncludeMiniDumps,
+    [int]$CaptureNetSeconds    = 0,
+    [switch]$Sanitize,
     [string]$ReportDir,
     [switch]$NoFinalize
 )
@@ -135,6 +146,127 @@ function Invoke-PythonScript($projectRoot, $scriptPath) {
     [PSCustomObject]@{ Output = $out; ExitCode = $exit }
 }
 
+function Get-LikelyFixes {
+    param([string[]]$SummaryLines)
+    # Each rule: regex matched against summary text -> plain-English fix.
+    $rules = @(
+        @{ Pattern = 'bug-check|BSOD|MEMORY\.DMP'                            ; Fix = 'Recent kernel crashes detected. Causes are usually a bad driver or failing RAM. Update graphics/storage drivers, then run Windows Memory Diagnostic (mdsched.exe).' }
+        @{ Pattern = 'app crash|crash/hang'                                   ; Fix = 'One or more applications crashed recently. Reinstall the failing app and check for Windows + .NET updates.' }
+        @{ Pattern = 'physical disk.*not healthy'                             ; Fix = 'A physical disk reports as unhealthy. Back up your data immediately and consider replacing the drive.' }
+        @{ Pattern = 'Clock skew is'                                          ; Fix = 'System clock is out of sync. Fix it under Settings > Time and language > Date and time > Sync now.' }
+        @{ Pattern = 'No real Python on PATH'                                 ; Fix = 'No working Python is installed. Get one from https://python.org (check Add to PATH during install).' }
+        @{ Pattern = 'WindowsApps python\.exe stub'                           ; Fix = 'Disable the python.exe stub under Settings > Apps > Advanced app settings > App execution aliases.' }
+        @{ Pattern = 'WinINET proxy is enabled'                               ; Fix = 'A proxy is intercepting web requests. If you do not need it, turn it off under Settings > Network and internet > Proxy.' }
+        @{ Pattern = 'No endpoints reachable|DNS lookup failed'               ; Fix = 'Network requests are failing. Try a different network, or change DNS to 1.1.1.1 / 8.8.8.8 under your adapter settings.' }
+        @{ Pattern = 'DB file is a cloud placeholder'                         ; Fix = 'Database file has not been downloaded by your cloud sync. Right-click it in File Explorer and choose Always keep on this device.' }
+        @{ Pattern = 'DB integrity check returned errors'                     ; Fix = 'SQLite database is corrupt. Restore from your most recent backup.' }
+        @{ Pattern = 'DISM reports component store issues'                    ; Fix = 'Windows component store has issues. Open elevated PowerShell and run: DISM /Online /Cleanup-Image /RestoreHealth then sfc /scannow.' }
+        @{ Pattern = 'Not elevated'                                           ; Fix = 'Re-run elevated (right-click PowerShell > Run as administrator) to capture admin-only data like DISM and some event logs.' }
+    )
+    $fixes = New-Object System.Collections.ArrayList
+    foreach ($rule in $rules) {
+        if (($SummaryLines | Out-String) -match $rule.Pattern) {
+            [void]$fixes.Add($rule.Fix)
+        }
+    }
+    return $fixes
+}
+
+function Invoke-Sanitize {
+    param([string]$Dir)
+    # Build replacement map of obvious PII.
+    $replacements = [ordered]@{
+        ([Regex]::Escape($env:COMPUTERNAME))                                                     = '<PC>'
+        ([Regex]::Escape($env:USERNAME))                                                         = '<USER>'
+        ([Regex]::Escape($env:USERPROFILE))                                                      = '<USERPROFILE>'
+        '\b([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}\b'                                              = '<MAC>'
+        '\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'                                                      = '<10.x.x.x>'
+        '\b192\.168\.\d{1,3}\.\d{1,3}\b'                                                         = '<192.168.x.x>'
+        '\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b'                                          = '<172.16-31.x.x>'
+    }
+    if ($env:USERDOMAIN) { $replacements[[Regex]::Escape($env:USERDOMAIN)] = '<DOMAIN>' }
+
+    Get-ChildItem -Path $Dir -Recurse -File -Include '*.txt','*.csv','*.log','*.html','*.json' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try {
+                $content = Get-Content $_.FullName -Raw -ErrorAction Stop
+                foreach ($pat in $replacements.Keys) {
+                    $content = [Regex]::Replace($content, $pat, $replacements[$pat], 'IgnoreCase')
+                }
+                Set-Content -Path $_.FullName -Value $content -Encoding UTF8 -NoNewline
+            } catch {}
+        }
+}
+
+function Write-HtmlReport {
+    param([string]$Dir, [string]$Title = 'Diagnostics Report', [string[]]$Fixes = @())
+
+    $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+
+    $rows = foreach ($line in $script:summary) {
+        $level = ($line -split ' ',2)[0] -replace '\[|\]',''
+        $msg   = ($line -split ' ',2)[1]
+        $cls = switch ($level) { 'OK' {'ok'} 'WARN' {'warn'} 'FAIL' {'fail'} default {'info'} }
+        "<tr class='$cls'><td class='lvl'>$level</td><td>$([System.Web.HttpUtility]::HtmlEncode($msg))</td></tr>"
+    }
+    $rowsHtml = $rows -join ''
+    $verdictTable = "<table class='verdicts'><thead><tr><th>Level</th><th>Finding</th></tr></thead><tbody>$rowsHtml</tbody></table>"
+
+    $fixesHtml = if ($Fixes.Count -gt 0) {
+        $items = ($Fixes | ForEach-Object { '<li>' + [System.Web.HttpUtility]::HtmlEncode($_) + '</li>' }) -join ''
+        "<details open><summary><b>Likely fixes ($($Fixes.Count))</b></summary><ul class='fixes'>$items</ul></details>"
+    } else {
+        '<p class="muted">No likely-fix matches.</p>'
+    }
+
+    $fileLinks = Get-ChildItem -Path $Dir -File -ErrorAction SilentlyContinue |
+        Sort-Object Name |
+        Where-Object { $_.Name -notmatch '\.(html|zip)$' } |
+        ForEach-Object {
+            $name = $_.Name
+            $size = if ($_.Length -gt 1KB) { "$([math]::Round($_.Length/1KB,1)) KB" } else { "$($_.Length) B" }
+            "<li><a href='$name'>$name</a> <span class='muted'>$size</span></li>"
+        }
+    $fileCount = (Get-ChildItem $Dir -File).Count
+    $fileLinksHtml = $fileLinks -join ''
+    $fileList = "<details><summary><b>All collected files ($fileCount)</b></summary><ul>$fileLinksHtml</ul></details>"
+
+    Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+
+    $css = @'
+body { font: 14px/1.5 -apple-system, Segoe UI, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; }
+h1 { margin: 0 0 4px; font-size: 22px; }
+.subtitle { color: #666; margin-bottom: 24px; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top; }
+th { background: #f4f4f6; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #555; }
+td.lvl { font-weight: 600; width: 80px; }
+tr.ok td.lvl   { color: #138a36; }
+tr.warn td.lvl { color: #a06200; }
+tr.fail td.lvl { color: #b3261e; }
+ul.fixes li { margin-bottom: 6px; }
+details { background: #fafafa; border: 1px solid #e5e5ea; border-radius: 6px; padding: 10px 14px; margin: 10px 0; }
+details summary { cursor: pointer; outline: none; }
+.muted { color: #888; font-size: 12px; }
+'@
+
+    $html = @"
+<!DOCTYPE html>
+<html><head><meta charset='utf-8'><title>$Title</title><style>$css</style></head>
+<body>
+<h1>$Title</h1>
+<div class='subtitle'>Generated $generated on host $env:COMPUTERNAME (user $env:USERNAME).</div>
+<h2>Likely fixes</h2>
+$fixesHtml
+<h2>Verdicts</h2>
+$verdictTable
+<h2>Files</h2>
+$fileList
+</body></html>
+"@
+    $html | Set-Content -Path (Join-Path $Dir '00-summary.html') -Encoding UTF8
+}
+
 function Initialize-Report {
     param(
         [string]$OutputRoot  = [Environment]::GetFolderPath('Desktop'),
@@ -152,10 +284,16 @@ function Initialize-Report {
 }
 
 function Finalize-Report {
-    param([string]$ReportDir = $script:reportDir)
+    param(
+        [string]$ReportDir = $script:reportDir,
+        [switch]$Sanitize
+    )
 
     $summaryPath = Join-Path $ReportDir '00-SUMMARY.txt'
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+
+    $likelyFixes = Get-LikelyFixes -SummaryLines $script:summary
+
     $header = @(
         "Diagnostics summary"
         "Generated: $generated"
@@ -165,10 +303,28 @@ function Finalize-Report {
     )
     $counts = $script:summary | Group-Object { ($_ -split ' ',2)[0] } |
         ForEach-Object { "{0,-7} {1}" -f $_.Name, $_.Count }
-    ($header + $counts + '' + ($script:summary | Sort-Object)) -join "`r`n" |
+
+    $fixBlock = @()
+    if ($likelyFixes.Count -gt 0) {
+        $fixBlock += ''
+        $fixBlock += 'Likely fixes:'
+        for ($i = 0; $i -lt $likelyFixes.Count; $i++) {
+            $fixBlock += ("  {0}. {1}" -f ($i + 1), $likelyFixes[$i])
+        }
+    }
+
+    ($header + $counts + $fixBlock + '' + ($script:summary | Sort-Object)) -join "`r`n" |
         Set-Content $summaryPath -Encoding UTF8
 
+    Write-HtmlReport -Dir $ReportDir -Title "Diagnostics: $env:COMPUTERNAME" -Fixes $likelyFixes
+
     Stop-Transcript | Out-Null
+
+    if ($Sanitize) {
+        Write-Host ''
+        Write-Host 'Sanitizing report (redacting username, hostname, MACs, private IPs)...' -ForegroundColor Yellow
+        Invoke-Sanitize -Dir $ReportDir
+    }
 
     $zipPath = "$ReportDir.zip"
     Compress-Archive -Path (Join-Path $ReportDir '*') -DestinationPath $zipPath -Force -CompressionLevel Optimal
@@ -176,13 +332,15 @@ function Finalize-Report {
     Write-Host ''
     Write-Host 'Diagnostics collected:' -ForegroundColor Green
     Write-Host "  Folder: $ReportDir"
+    $htmlReport = Join-Path $ReportDir '00-summary.html'
+    Write-Host "  Report: $htmlReport"
     Write-Host "  Zip:    $zipPath"
     Write-Host ''
     Write-Host 'Top-level verdicts:'
-    Get-Content $summaryPath | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
+    Get-Content $summaryPath | Select-Object -First 50 | ForEach-Object { Write-Host "  $_" }
 
     if (-not $env:CI) {
-        Try-Run 'Open folder' { Start-Process explorer.exe $ReportDir }
+        Try-Run 'Open report' { Start-Process (Join-Path $ReportDir '00-summary.html') }
     }
 }
 
@@ -193,10 +351,11 @@ function Finalize-Report {
 function Invoke-SystemDiagnostics {
     param(
         [string]$ReportDir   = $script:reportDir,
-        [int]$EventLogDays   = 7,
-        [string[]]$Endpoints = @(),
-        [string]$WerKeywords = 'python|pythonw',
-        [switch]$IncludeMiniDumps
+        [int]$EventLogDays     = 7,
+        [string[]]$Endpoints   = @(),
+        [string]$WerKeywords   = 'python|pythonw',
+        [switch]$IncludeMiniDumps,
+        [int]$CaptureNetSeconds = 0
     )
     $script:reportDir = $ReportDir
     $since = (Get-Date).AddDays(-$EventLogDays)
@@ -492,6 +651,41 @@ function Invoke-SystemDiagnostics {
         }
     }
 
+    Try-Run 'Crash dump auto-analysis' {
+        # Try common cdb.exe / kd.exe locations from Windows Debugging Tools.
+        $cdb = @(
+            'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+            'C:\Program Files\Debugging Tools for Windows (x64)\cdb.exe'
+            'C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe'
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+        $dumpsToAnalyze = @()
+        $minidumpDir = 'C:\Windows\Minidump'
+        if (Test-Path $minidumpDir) {
+            $dumpsToAnalyze += Get-ChildItem $minidumpDir -File -Filter '*.dmp' -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-30) } |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 3
+        }
+
+        if (-not $cdb) {
+            'cdb.exe not found. Install Windows Debugging Tools (part of the Windows SDK) to enable crash-dump analysis.' |
+                Set-Content (Join-Path $ReportDir '06-dump-analysis.txt')
+        } elseif ($dumpsToAnalyze.Count -eq 0) {
+            'No recent .dmp files in C:\Windows\Minidump to analyze.' |
+                Set-Content (Join-Path $ReportDir '06-dump-analysis.txt')
+        } else {
+            $out = New-Object System.Text.StringBuilder
+            foreach ($d in $dumpsToAnalyze) {
+                $null = $out.AppendLine("=== $($d.FullName) ($($d.LastWriteTime)) ===")
+                $analysis = & $cdb -z $d.FullName -c '!analyze -v;q' -lines -logo NUL 2>&1 | Out-String
+                $null = $out.AppendLine($analysis)
+                $null = $out.AppendLine('')
+            }
+            Save-Text '06-dump-analysis.txt' $out.ToString()
+            Add-Summary 'OK' "Analyzed $($dumpsToAnalyze.Count) recent crash dumps via cdb.exe."
+        }
+    }
+
     # -----------------------------------------------------------------------
     # 7. Hardware: drivers, storage, memory
     # -----------------------------------------------------------------------
@@ -532,6 +726,34 @@ function Invoke-SystemDiagnostics {
                 @{n='CapacityGB';e={[math]::Round($_.Capacity/1GB,1)}},
                 Speed, ConfiguredClockSpeed, DeviceLocator |
             Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '07-memory-modules.csv')
+    }
+
+    Try-Run 'Battery health' {
+        $batt = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue
+        if (-not $batt) {
+            'No battery present (desktop or VM).' |
+                Set-Content (Join-Path $ReportDir '07-battery.txt')
+            return
+        }
+        $report = Join-Path $ReportDir '07-battery-report.html'
+        try {
+            & powercfg /batteryreport /output $report /duration 14 2>&1 | Out-Null
+            if (Test-Path $report) {
+                # powercfg report includes design vs full-charge capacity.
+                $html = Get-Content $report -Raw
+                if ($html -match 'DESIGN CAPACITY[^<]*<[^>]*>([0-9,]+)\s*mWh' -and
+                    $html -match 'FULL CHARGE CAPACITY[^<]*<[^>]*>([0-9,]+)\s*mWh') {
+                    # Naive scrape; on most systems powercfg uses a table - this is best-effort.
+                }
+                Add-Summary 'OK' 'Battery report generated (07-battery-report.html).'
+            }
+        } catch {
+            Add-Summary 'WARN' "Battery report failed: $($_.Exception.Message)"
+        }
+        $info = $batt | Select-Object Name, BatteryStatus, EstimatedChargeRemaining,
+            EstimatedRunTime, DesignVoltage, DesignCapacity, FullChargeCapacity
+        $info | Format-List | Out-String |
+            Set-Content (Join-Path $ReportDir '07-battery.txt')
     }
 
     # -----------------------------------------------------------------------
@@ -598,6 +820,52 @@ function Invoke-SystemDiagnostics {
         Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
             Select-Object InterfaceAlias, AddressFamily, @{n='Servers';e={ ($_.ServerAddresses -join ', ') }} |
             Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '09-dns-client.csv')
+    }
+
+    Try-Run 'WiFi state' {
+        $netshOut = & netsh wlan show interfaces 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $netshOut -match 'no wireless interface') {
+            'No WiFi interfaces present.' |
+                Set-Content (Join-Path $ReportDir '09-wifi.txt')
+            return
+        }
+        $sb = New-Object System.Text.StringBuilder
+        $null = $sb.AppendLine('--- netsh wlan show interfaces ---')
+        $null = $sb.AppendLine($netshOut)
+        $null = $sb.AppendLine('--- netsh wlan show profiles ---')
+        $null = $sb.AppendLine((& netsh wlan show profiles 2>&1 | Out-String))
+        $null = $sb.AppendLine('--- netsh wlan show networks mode=bssid ---')
+        $null = $sb.AppendLine((& netsh wlan show networks mode=bssid 2>&1 | Out-String))
+        Save-Text '09-wifi.txt' $sb.ToString()
+
+        if ($netshOut -match 'Signal\s*:\s*(\d+)%') {
+            $signal = [int]$Matches[1]
+            if ($signal -lt 40) {
+                Add-Summary 'WARN' "WiFi signal weak ($signal%)."
+            } else {
+                Add-Summary 'OK' "WiFi signal $signal%."
+            }
+        }
+    }
+
+    if ($CaptureNetSeconds -gt 0) {
+        if (-not $isAdmin) {
+            Add-Summary 'WARN' "Network capture skipped: -CaptureNetSeconds $CaptureNetSeconds requested but not elevated."
+        } else {
+            Try-Run "Network capture ($CaptureNetSeconds s)" {
+                $etl = Join-Path $ReportDir '09-network-capture.etl'
+                Write-Host "  Capturing network for $CaptureNetSeconds seconds..." -ForegroundColor Yellow
+                & netsh trace start capture=yes tracefile=$etl maxsize=200 overwrite=yes 2>&1 | Out-Null
+                Start-Sleep -Seconds $CaptureNetSeconds
+                & netsh trace stop 2>&1 | Out-Null
+                if (Test-Path $etl) {
+                    $sizeMb = [math]::Round((Get-Item $etl).Length / 1MB, 1)
+                    Add-Summary 'OK' "Captured ${sizeMb} MB of network trace (09-network-capture.etl)."
+                } else {
+                    Add-Summary 'FAIL' 'Network capture produced no .etl file.'
+                }
+            }
+        }
     }
 
     Try-Run 'DNS for endpoints' {
@@ -743,8 +1011,9 @@ if ($MyInvocation.InvocationName -ne '.') {
         if (-not $script:summary) { $script:summary = New-Object System.Collections.ArrayList }
     }
     Invoke-SystemDiagnostics -ReportDir $ReportDir -EventLogDays $EventLogDays `
-        -Endpoints $Endpoints -WerKeywords $WerKeywords -IncludeMiniDumps:$IncludeMiniDumps
+        -Endpoints $Endpoints -WerKeywords $WerKeywords -IncludeMiniDumps:$IncludeMiniDumps `
+        -CaptureNetSeconds $CaptureNetSeconds
     if (-not $NoFinalize) {
-        Finalize-Report -ReportDir $ReportDir
+        Finalize-Report -ReportDir $ReportDir -Sanitize:$Sanitize
     }
 }
