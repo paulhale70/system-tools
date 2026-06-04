@@ -14,7 +14,7 @@
 .PARAMETER Project
     Filter to a specific project name (e.g. 'MediaInventory').
 
-.PARAMETER Host
+.PARAMETER ComputerName
     Filter to a specific host (default: all hosts).
 
 .PARAMETER Top
@@ -27,7 +27,7 @@
 [CmdletBinding()]
 param(
     [string]$Project,
-    [string]$Host,
+    [string]$ComputerName,
     [int]$Top = 15,
     [string]$HistoryPath = (Join-Path $env:USERPROFILE 'diagnostics-history.json')
 )
@@ -43,8 +43,8 @@ if (-not (Test-Path $HistoryPath)) {
 $raw = Get-Content $HistoryPath -Raw
 $history = @($raw | ConvertFrom-Json)
 
-if ($Project) { $history = @($history | Where-Object { $_.project -eq $Project }) }
-if ($Host)    { $history = @($history | Where-Object { $_.host    -eq $Host }) }
+if ($Project)      { $history = @($history | Where-Object { $_.project -eq $Project }) }
+if ($ComputerName) { $history = @($history | Where-Object { $_.host    -eq $ComputerName }) }
 
 if ($history.Count -eq 0) {
     Write-Host "No runs match the filters." -ForegroundColor Yellow
@@ -57,8 +57,8 @@ Write-Host ('  ' + ('-' * 60))
 Write-Host ("  History file : $HistoryPath")
 Write-Host ("  Total runs   : $($history.Count)")
 Write-Host ("  Date range   : $($history[0].ts)  ->  $($history[-1].ts)")
-if ($Project) { Write-Host ("  Project      : $Project") }
-if ($Host)    { Write-Host ("  Host         : $Host") }
+if ($Project)      { Write-Host ("  Project      : $Project") }
+if ($ComputerName) { Write-Host ("  Host         : $ComputerName") }
 Write-Host ''
 
 # Per project / host breakdown.
