@@ -6,3 +6,10 @@ __pycache__/
 *.log
 *.log.*
 .env
+
+# .NET / Visual Studio (desktop/)
+bin/
+obj/
+.vs/
+*.user
+*.suo
