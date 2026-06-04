@@ -1,0 +1,53 @@
+<UserControl x:Class="SystemTools.Desktop.Views.TrendsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:scott="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
+             Loaded="OnLoaded">
+    <Grid Margin="20" DataContext="{Binding Trends}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+            <TextBlock Text="Trends across all runs"
+                       FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding TotalRuns, StringFormat='   ({0} runs, '}"
+                       Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding DateRange}"
+                       Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+            <TextBlock Text=")" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+        </StackPanel>
+
+        <Border Grid.Row="1" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                Background="White" CornerRadius="6" Padding="10" Margin="0,0,0,12">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="OK / WARN / FAIL counts over time"
+                           Foreground="{StaticResource MutedBrush}" FontSize="11" FontWeight="SemiBold"
+                           Margin="0,0,0,8" />
+                <scott:WpfPlot x:Name="Plot" />
+            </DockPanel>
+        </Border>
+
+        <Border Grid.Row="2" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                Background="{StaticResource PanelBrush}" CornerRadius="6">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="Top recurring WARN/FAIL verdicts"
+                           Foreground="{StaticResource MutedBrush}" FontSize="11" FontWeight="SemiBold"
+                           Margin="14,12,0,4" />
+                <DataGrid ItemsSource="{Binding Recurring}"
+                          AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                          IsReadOnly="True" HeadersVisibility="Column"
+                          BorderThickness="0" GridLinesVisibility="Horizontal"
+                          Background="Transparent"
+                          RowBackground="Transparent" AlternatingRowBackground="#F3F4F6">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Seen" Binding="{Binding Count}" Width="80" />
+                        <DataGridTextColumn Header="Verdict" Binding="{Binding Verdict}" Width="*" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+        </Border>
+    </Grid>
+</UserControl>

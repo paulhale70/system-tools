@@ -1,0 +1,77 @@
+<UserControl x:Class="SystemTools.Desktop.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="20" MaxWidth="720" HorizontalAlignment="Left">
+
+            <TextBlock Text="Settings" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,16" />
+
+            <!-- Scheduled run -->
+            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="6" Background="{StaticResource PanelBrush}"
+                    Padding="20" Margin="0,0,0,16" DataContext="{Binding Settings}">
+                <StackPanel>
+                    <TextBlock Text="Weekly scheduled run" FontWeight="SemiBold" />
+                    <TextBlock Text="Registers a Windows Scheduled Task that runs system-diagnostics.ps1 on a weekly cadence. No elevation required for non-admin captures."
+                               Foreground="{StaticResource MutedBrush}" FontSize="12"
+                               TextWrapping="Wrap" Margin="0,4,0,12" />
+
+                    <CheckBox Content="Enabled" IsChecked="{Binding ScheduleEnabled}" Margin="0,0,0,8" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Day:" VerticalAlignment="Center" Margin="0,0,8,0" Width="60" />
+                        <ComboBox ItemsSource="{Binding DaysOfWeek}" SelectedItem="{Binding ScheduleDay}" Width="140" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Time:" VerticalAlignment="Center" Margin="0,0,8,0" Width="60" />
+                        <TextBox Text="{Binding ScheduleTime, UpdateSourceTrigger=PropertyChanged}" Width="80" />
+                        <TextBlock Text="HH:MM (24-hour)" Foreground="{StaticResource MutedBrush}"
+                                   Margin="8,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <CheckBox Content="Sanitize PII in scheduled runs"
+                              IsChecked="{Binding ScheduleSanitize}" Margin="0,4,0,12" />
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Apply" Style="{StaticResource PrimaryButton}"
+                                Click="OnApplyScheduleClick" Padding="14,7" />
+                        <TextBlock Text="{Binding ScheduleStatus}"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   Margin="16,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Updates -->
+            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="6" Background="{StaticResource PanelBrush}"
+                    Padding="20" Margin="0,0,0,16" DataContext="{Binding Settings}">
+                <StackPanel>
+                    <TextBlock Text="Updates" FontWeight="SemiBold" />
+                    <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap"
+                               Margin="0,4,0,12">
+                        Checks github.com/paulhale70/System-tools for the latest release.
+                    </TextBlock>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="Current version:" Width="120" />
+                        <TextBlock Text="{Binding CurrentVersion}" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <TextBlock Text="Latest version:" Width="120" />
+                        <TextBlock Text="{Binding LatestVersion}" FontWeight="SemiBold" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Check now" Click="OnCheckUpdatesClick"
+                                Padding="14,7" Margin="0,0,8,0" />
+                        <Button Content="Open release page" Click="OnOpenReleaseClick"
+                                Padding="14,7"
+                                IsEnabled="{Binding UpdateAvailable}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding UpdateStatus}"
+                               Foreground="{StaticResource MutedBrush}" Margin="0,10,0,0" />
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

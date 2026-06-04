@@ -6,7 +6,33 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [1.0.0] - 2026-06-01
 
-First stable release. The repository now hosts two independent projects.
+First stable release. The repository now hosts three sibling projects.
+
+### desktop/
+
+First public release of the WPF / .NET 8 GUI front-end.
+Distributable as a self-contained single-file `.exe` (~75 MB, no
+.NET install required). Includes every roadmap item originally
+queued for v2:
+
+- Sidebar nav (Run, Diff, Trends, Plugins, Settings).
+- **Run** tab: toolbar with `-Sanitize`, `-IncludeMiniDumps`,
+  `-CaptureNetSeconds`; history sidebar with OK/WARN/FAIL count
+  pills; embedded WebView2 viewer for `00-summary.html`.
+- **Diff** tab: pick any two recorded runs; invokes
+  `diff-diagnostics.ps1` and shows the result inline.
+- **Trends** tab: ScottPlot line chart of OK/WARN/FAIL counts over
+  the last 20 runs; top 15 recurring WARN/FAIL verdicts across all
+  history.
+- **Plugins** tab: enumerates `diagnostics/plugins/`; import,
+  enable/disable (renames `.ps1 <-> .ps1.disabled`), delete, open
+  folder, reload.
+- **Settings** tab: weekly scheduled run via `schtasks.exe`; update
+  check against the GitHub releases API; background update probe
+  on startup.
+- Optional code-signing during `build.bat` via `SIGNING_PFX` env
+  var (kills the SmartScreen "Windows protected your PC" dialog
+  on family machines).
 
 ### diagnostics/
 
@@ -63,6 +89,13 @@ First public release of the generic Windows diagnostic toolset.
 - Crash-dump auto-analysis — if Windows Debugging Tools (`cdb.exe`)
   is installed, runs `!analyze -v` on recent minidumps and dumps the
   bug-check root cause as text.
+
+**Plugins**
+- New `plugins/` folder dot-sourced by `Invoke-SystemDiagnostics`
+  after section 10. Each `.ps1` runs in-context and can call
+  `Add-Summary`, `Save-Text`, `Write-Section`, etc. Disabled
+  plugins (`.ps1.disabled`) are skipped.
+- README + sample plugin shipped alongside.
 
 **Encoding hardening**
 - All `.ps1` files: UTF-8 BOM + CRLF, ASCII-only content. Sidesteps a

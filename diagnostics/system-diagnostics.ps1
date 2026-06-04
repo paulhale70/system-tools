@@ -1293,6 +1293,28 @@ function Invoke-SystemDiagnostics {
     Try-Run 'systeminfo' {
         & systeminfo.exe 2>&1 | Out-File (Join-Path $ReportDir '10-systeminfo.txt') -Encoding UTF8
     }
+
+    # -----------------------------------------------------------------------
+    # 11. Plugins
+    # -----------------------------------------------------------------------
+    # Any .ps1 dropped into <script-dir>/plugins/ is dot-sourced inside the
+    # current Invoke-SystemDiagnostics context. Each plugin can call
+    # Add-Summary, Save-Text, Write-Section, etc. freely - they share
+    # $script:reportDir and $script:summary.
+    $pluginDir = Join-Path $PSScriptRoot 'plugins'
+    if (Test-Path $pluginDir) {
+        $plugins = Get-ChildItem -Path $pluginDir -Filter '*.ps1' -ErrorAction SilentlyContinue |
+                   Sort-Object Name
+        if ($plugins) {
+            Write-Section "11. Plugins ($($plugins.Count))"
+            foreach ($plugin in $plugins) {
+                Try-Run "Plugin: $($plugin.Name)" {
+                    . $plugin.FullName
+                }
+            }
+            Add-Summary 'OK' "Loaded $($plugins.Count) plugin(s) from $pluginDir"
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------

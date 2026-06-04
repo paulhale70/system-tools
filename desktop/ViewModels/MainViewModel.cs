@@ -1,7 +1,5 @@
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Globalization;
-using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Data;
 using SystemTools.Desktop.Models;
@@ -9,7 +7,7 @@ using SystemTools.Desktop.Services;
 
 namespace SystemTools.Desktop.ViewModels;
 
-public sealed class MainViewModel : INotifyPropertyChanged
+public sealed class MainViewModel : ViewModelBase
 {
     private readonly HistoryReader _history = new();
     private readonly DiagnosticsRunner? _runner;
@@ -19,16 +17,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _captureNetSeconds = "0";
     private string _statusMessage = "Ready.";
     private RunHistoryEntry? _selectedRun;
+    private NavTab _selectedTab = NavTab.Run;
 
     public MainViewModel()
     {
         try { _runner = new DiagnosticsRunner(); }
         catch (FileNotFoundException ex) { _statusMessage = ex.Message; _canRun = false; }
 
+        var scriptPath = _runner?.ScriptPath;
+        Diff     = new DiffViewModel(scriptPath);
+        Trends   = new TrendsViewModel();
+        Plugins  = new PluginsViewModel(scriptPath);
+        Settings = new SettingsViewModel(scriptPath);
+
         ReloadHistory();
-        if (History.Count > 0) SelectedRun = History[0]; // newest first
+        if (History.Count > 0) SelectedRun = History[0];
+
+        // Background update check on launch; never blocks the UI.
+        _ = Task.Run(async () => await Settings.CheckUpdatesAsync());
     }
 
+    // --- Sub-view-models ----------------------------------------------------
+    public DiffViewModel     Diff     { get; }
+    public TrendsViewModel   Trends   { get; }
+    public PluginsViewModel  Plugins  { get; }
+    public SettingsViewModel Settings { get; }
+
+    // --- Run state ----------------------------------------------------------
     public ObservableCollection<RunHistoryEntry> History { get; } = new();
 
     public RunHistoryEntry? SelectedRun
@@ -36,9 +51,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         get => _selectedRun;
         set
         {
-            if (_selectedRun == value) return;
-            _selectedRun = value;
-            OnPropertyChanged();
+            if (!Set(ref _selectedRun, value)) return;
             OnPropertyChanged(nameof(SelectedReportUri));
             OnPropertyChanged(nameof(HasSelectedReport));
         }
@@ -52,39 +65,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return string.IsNullOrEmpty(p) ? null : new Uri(p);
         }
     }
-
     public bool HasSelectedReport => _selectedRun?.ReportHtmlPath is not null;
+    public bool CanRun { get => _canRun; set => Set(ref _canRun, value); }
+    public bool SanitizeEnabled         { get => _sanitize;         set => Set(ref _sanitize, value); }
+    public bool IncludeMiniDumpsEnabled { get => _includeMiniDumps; set => Set(ref _includeMiniDumps, value); }
+    public string CaptureNetSeconds     { get => _captureNetSeconds; set => Set(ref _captureNetSeconds, value); }
+    public string StatusMessage         { get => _statusMessage;    set => Set(ref _statusMessage, value); }
 
-    public bool CanRun
+    // --- Navigation ---------------------------------------------------------
+    public NavTab SelectedTab
     {
-        get => _canRun;
-        set { if (_canRun != value) { _canRun = value; OnPropertyChanged(); } }
-    }
+        get => _selectedTab;
+        set
+        {
+            if (!Set(ref _selectedTab, value)) return;
+            OnPropertyChanged(nameof(IsRunTab));
+            OnPropertyChanged(nameof(IsDiffTab));
+            OnPropertyChanged(nameof(IsTrendsTab));
+            OnPropertyChanged(nameof(IsPluginsTab));
+            OnPropertyChanged(nameof(IsSettingsTab));
 
-    public bool SanitizeEnabled
-    {
-        get => _sanitize;
-        set { if (_sanitize != value) { _sanitize = value; OnPropertyChanged(); } }
+            // Re-populate the dependent view-models when their tab opens.
+            if (value == NavTab.Diff)   Diff.SetRuns(History);
+            if (value == NavTab.Trends) Trends.Load(History);
+        }
     }
+    public bool IsRunTab      => _selectedTab == NavTab.Run;
+    public bool IsDiffTab     => _selectedTab == NavTab.Diff;
+    public bool IsTrendsTab   => _selectedTab == NavTab.Trends;
+    public bool IsPluginsTab  => _selectedTab == NavTab.Plugins;
+    public bool IsSettingsTab => _selectedTab == NavTab.Settings;
 
-    public bool IncludeMiniDumpsEnabled
-    {
-        get => _includeMiniDumps;
-        set { if (_includeMiniDumps != value) { _includeMiniDumps = value; OnPropertyChanged(); } }
-    }
-
-    public string CaptureNetSeconds
-    {
-        get => _captureNetSeconds;
-        set { if (_captureNetSeconds != value) { _captureNetSeconds = value; OnPropertyChanged(); } }
-    }
-
-    public string StatusMessage
-    {
-        get => _statusMessage;
-        set { if (_statusMessage != value) { _statusMessage = value; OnPropertyChanged(); } }
-    }
-
+    // --- Actions ------------------------------------------------------------
     public async Task RunDiagnosticsAsync()
     {
         if (_runner is null) { StatusMessage = "system-diagnostics.ps1 not found."; return; }
@@ -109,37 +121,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ReloadHistory();
             if (History.Count > 0) SelectedRun = History[0];
         }
-        catch (Exception ex)
-        {
-            StatusMessage = "Error: " + ex.Message;
-        }
-        finally
-        {
-            CanRun = true;
-        }
+        catch (Exception ex) { StatusMessage = "Error: " + ex.Message; }
+        finally { CanRun = true; }
     }
 
     private void ReloadHistory()
     {
-        var entries = _history.Load();
+        var entries = _history.Load().OrderByDescending(x => x.Timestamp).ToList();
         History.Clear();
-        // newest first
-        foreach (var e in entries.OrderByDescending(x => x.Timestamp))
-            History.Add(e);
+        foreach (var e in entries) History.Add(e);
     }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
-/// <summary>True -> Collapsed, False -> Visible. Used to show the "no
-/// report selected" placeholder.</summary>
+public enum NavTab { Run, Diff, Trends, Plugins, Settings }
+
+/// <summary>True -> Collapsed, False -> Visible.</summary>
 public sealed class InvertedBoolToVisibilityConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         => (value is bool b && b) ? Visibility.Collapsed : Visibility.Visible;
-
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         => throw new NotSupportedException();
+}
+
+/// <summary>Compares a NavTab value against the converter parameter and
+/// returns true if equal. Used to highlight the active sidebar item.</summary>
+public sealed class EnumEqualsConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value?.ToString() == parameter?.ToString();
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => (value is bool b && b) ? Enum.Parse(typeof(NavTab), parameter?.ToString() ?? "Run") : Binding.DoNothing;
 }

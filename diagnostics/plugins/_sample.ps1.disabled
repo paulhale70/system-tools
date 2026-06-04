@@ -1,0 +1,12 @@
+﻿# Sample plugin - rename to '_sample.ps1' to enable.
+# Runs after section 10 of system-diagnostics.ps1 with full access to
+# helpers ($ReportDir, Add-Summary, Save-Text, Try-Run, Write-Section).
+
+Write-Section 'Sample plugin'
+
+Try-Run 'Show top 5 largest files in temp' {
+    $top = Get-ChildItem -Path $env:TEMP -File -Recurse -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 5 FullName, Length, LastWriteTime
+    $top | Format-Table -AutoSize | Out-String | Set-Content (Join-Path $ReportDir 'plugin-temp-top5.txt')
+    Add-Summary 'OK' 'Sample plugin recorded top 5 temp files.'
+}
