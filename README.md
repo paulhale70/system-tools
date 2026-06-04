@@ -1,5 +1,9 @@
 # System-tools
 
+Version **1.0.0** &middot;
+[CHANGELOG](CHANGELOG.md) &middot;
+[LICENSE](LICENSE) (MIT)
+
 Two independent projects in one repo:
 
 | Folder | What it is |
