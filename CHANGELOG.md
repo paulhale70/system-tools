@@ -4,6 +4,42 @@ All notable changes to this repository will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-06-04
+
+### web/ (new)
+
+First release of the standalone HTML SPA dashboard for browsing
+diagnostics history.
+
+- One-file `index.html` with no build, server, or install. Open in
+  any modern browser; works on Windows, macOS, Linux, and mobile.
+- Drag-and-drop or file-picker load of
+  `%USERPROFILE%\diagnostics-history.json` (or any compatible JSON
+  array). Loaded state cached in `localStorage` so a refresh keeps
+  the data; one-click Clear wipes the cache.
+- Sidebar navigation with four tabs:
+  - **Overview** - totals (Runs / OK / WARN / FAIL), per-host and
+    per-project breakdowns, latest-run card.
+  - **History** - filterable / searchable list of every run with
+    OK/WARN/FAIL count pills, plus a side panel that renders all
+    verdicts of the selected run with color-coded pills.
+  - **Trends** - Chart.js line chart of OK / WARN / FAIL counts
+    over the last 20 runs.
+  - **Recurring** - top 25 WARN/FAIL verdicts ranked by frequency
+    across the full loaded history.
+- Tailwind CSS (via CDN), Alpine.js for reactivity, Chart.js for
+  the trend visualization. No npm, no compilation step. View source
+  to audit before opening.
+- Complements the WPF desktop: desktop *runs* diagnostics, web
+  *visualizes* them.
+
+### repo
+
+- Top-level README updated to list four sibling projects (was three).
+- README gains a "When to use which" quick-reference table covering
+  run / view / compare / bootstrap / help-non-technical scenarios.
+- Quick-links section now includes `web/README.md`.
+
 ## [1.0.0] - 2026-06-01
 
 First stable release. The repository now hosts three sibling projects.
