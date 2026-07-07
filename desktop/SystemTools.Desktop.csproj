@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>SystemTools.Desktop</RootNamespace>
     <AssemblyName>SystemTools.Desktop</AssemblyName>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Authors>Paul Hale</Authors>
     <Product>System-tools Diagnostics</Product>
     <ApplicationIcon></ApplicationIcon>

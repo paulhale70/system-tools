@@ -4,6 +4,56 @@ All notable changes to this repository will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-06-15
+
+### diagnostics/
+
+- **WinDbg integration for crash-dump analysis.** The
+  `Crash dump auto-analysis` section (renamed to
+  `WinDbg crash dump analysis`) is now a full debugger workflow
+  instead of a single `!analyze -v` call.
+  - Broader debugger discovery: new WinDbg (Microsoft Store),
+    classic WinDbg, Windows SDK 10/11 Debugging Tools, and the
+    legacy "Debugging Tools for Windows" location.
+  - Microsoft public symbol server
+    (`https://msdl.microsoft.com/download/symbols`) is wired in
+    with a local cache at `%TEMP%\SymbolCache` (override with
+    `-DumpSymbolCache <path>`). First run downloads the symbols
+    it needs; subsequent runs are fast.
+  - Extended command batch:
+    `.sympath+ ...; .reload -f; !analyze -v; lmt; kn 20; q`.
+    Adds a loaded-module list with timestamps and a 20-frame
+    stack trace to every dump.
+  - **Plain-English hints for known bug-check codes.** The report
+    now says "*Dump abc.dmp - bugcheck 0x7E module=nvlddmkm -
+    SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: system-thread exception,
+    usually a driver.*" instead of just dumping the raw output.
+    Covers the ~30 most common codes (IRQL_NOT_LESS_OR_EQUAL,
+    PAGE_FAULT_IN_NONPAGED_AREA, DPC_WATCHDOG_VIOLATION,
+    VIDEO_TDR_ERROR, WHEA_UNCORRECTABLE_ERROR, and so on).
+  - Auto-verdicts extract `BUGCHECK_CODE`, `MODULE_NAME`,
+    `PROCESS_NAME`, and `FAILURE_BUCKET_ID` and surface them in
+    `00-SUMMARY.txt` and the HTML report.
+  - When `cdb.exe` is missing the report writes friendly
+    install instructions (`winget install Microsoft.WinDbg` or the
+    Windows SDK).
+- New `-AnalyzeKernelDump` switch to also analyze
+  `C:\Windows\MEMORY.DMP` (off by default; slow).
+- New `-DumpSymbolCache` parameter.
+
+### desktop/
+
+- **Run** tab gains an "Analyze kernel dump (slow)" checkbox
+  next to the existing crash-dump controls. Forwards as
+  `-AnalyzeKernelDump` to the collector.
+- `DiagnosticsRunner.Options` grows `AnalyzeKernelDump`.
+- Assembly version bumped to 1.3.0.
+
+### media-inventory/
+
+- `app-diagnostics.ps1` gains `-AnalyzeKernelDump` and forwards
+  it through.
+
 ## [1.2.0] - 2026-06-10
 
 ### diagnostics/

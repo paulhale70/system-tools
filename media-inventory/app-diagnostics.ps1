@@ -33,6 +33,10 @@
     Task-Manager-style performance sample duration in seconds
     (CPU / memory / disk / network counters + top-30 processes by
     CPU delta). Default: 5. Pass 0 to skip.
+
+.PARAMETER AnalyzeKernelDump
+    Also run WinDbg !analyze -v against C:\Windows\MEMORY.DMP.
+    Off by default (slow).
 #>
 
 [CmdletBinding()]
@@ -42,7 +46,8 @@ param(
     [switch]$Sanitize,
     [switch]$IncludeMiniDumps,
     [int]$CaptureNetSeconds  = 0,
-    [int]$PerfSampleSeconds  = 5
+    [int]$PerfSampleSeconds  = 5,
+    [switch]$AnalyzeKernelDump
 )
 
 $ErrorActionPreference = 'Continue'
@@ -63,7 +68,7 @@ $reportDir = Initialize-Report -OutputRoot $OutputRoot -ProjectName 'MediaInvent
 Invoke-SystemDiagnostics -ReportDir $reportDir -EventLogDays $EventLogDays `
     -Endpoints $endpoints -WerKeywords 'python|pythonw|main\.py|media_inventory' `
     -IncludeMiniDumps:$IncludeMiniDumps -CaptureNetSeconds $CaptureNetSeconds `
-    -PerfSampleSeconds $PerfSampleSeconds
+    -PerfSampleSeconds $PerfSampleSeconds -AnalyzeKernelDump:$AnalyzeKernelDump
 
 # ---------------------------------------------------------------------------
 # App-specific sections

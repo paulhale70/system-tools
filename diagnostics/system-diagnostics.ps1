@@ -52,6 +52,16 @@
     process ranking by CPU delta during the window. Default: 5.
     Pass 0 to skip.
 
+.PARAMETER AnalyzeKernelDump
+    In addition to recent minidumps, also run WinDbg's !analyze -v
+    against C:\Windows\MEMORY.DMP when present. Slow (minutes on
+    large dumps) and requires plenty of RAM. Off by default.
+
+.PARAMETER DumpSymbolCache
+    Local folder where Microsoft's public symbol server
+    (msdl.microsoft.com) caches downloaded symbols during
+    crash-dump analysis. Default: %TEMP%\SymbolCache.
+
 .PARAMETER Sanitize
     Redact obvious PII (username, computer name, MAC addresses, private
     IPs, user profile path) from all text files before zipping. Useful
@@ -75,6 +85,8 @@ param(
     [switch]$IncludeMiniDumps,
     [int]$CaptureNetSeconds    = 0,
     [int]$PerfSampleSeconds    = 5,
+    [switch]$AnalyzeKernelDump,
+    [string]$DumpSymbolCache   = (Join-Path $env:TEMP 'SymbolCache'),
     [switch]$Sanitize,
     [string]$ReportDir,
     [switch]$NoFinalize
@@ -84,7 +96,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
 $script:TOOL_NAME    = 'System-tools diagnostics'
-$script:TOOL_VERSION = '1.2.0'
+$script:TOOL_VERSION = '1.3.0'
 $script:HISTORY_PATH = Join-Path $env:USERPROFILE 'diagnostics-history.json'
 
 # ---------------------------------------------------------------------------
@@ -659,7 +671,9 @@ function Invoke-SystemDiagnostics {
         [string]$WerKeywords   = 'python|pythonw',
         [switch]$IncludeMiniDumps,
         [int]$CaptureNetSeconds = 0,
-        [int]$PerfSampleSeconds = 5
+        [int]$PerfSampleSeconds = 5,
+        [switch]$AnalyzeKernelDump,
+        [string]$DumpSymbolCache = (Join-Path $env:TEMP 'SymbolCache')
     )
     $script:reportDir = $ReportDir
     $since = (Get-Date).AddDays(-$EventLogDays)
@@ -955,14 +969,26 @@ function Invoke-SystemDiagnostics {
         }
     }
 
-    Try-Run 'Crash dump auto-analysis' {
-        # Try common cdb.exe / kd.exe locations from Windows Debugging Tools.
-        $cdb = @(
+    Try-Run 'WinDbg crash dump analysis' {
+        # Expanded cdb.exe search. Covers:
+        #   - Latest WinDbg (Microsoft Store, new UI)
+        #   - Windows SDK 10/11 Debugging Tools (x64 + x86)
+        #   - Legacy "Debugging Tools for Windows"
+        $cdbSearch = @(
+            'C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe'
+            'C:\Program Files\WinDbg\CurrentVersion\Contents\amd64\cdb.exe'
             'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+            'C:\Program Files (x86)\Windows Kits\11\Debuggers\x64\cdb.exe'
             'C:\Program Files\Debugging Tools for Windows (x64)\cdb.exe'
             'C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe'
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        )
+        $cdb = $null
+        foreach ($pattern in $cdbSearch) {
+            $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $cdb = $found.FullName; break }
+        }
 
+        # Recent minidumps.
         $dumpsToAnalyze = @()
         $minidumpDir = 'C:\Windows\Minidump'
         if (Test-Path $minidumpDir) {
@@ -970,24 +996,134 @@ function Invoke-SystemDiagnostics {
                 Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-30) } |
                 Sort-Object LastWriteTime -Descending | Select-Object -First 3
         }
+        if ($AnalyzeKernelDump -and (Test-Path 'C:\Windows\MEMORY.DMP')) {
+            $dumpsToAnalyze += Get-Item 'C:\Windows\MEMORY.DMP'
+        }
 
         if (-not $cdb) {
-            'cdb.exe not found. Install Windows Debugging Tools (part of the Windows SDK) to enable crash-dump analysis.' |
-                Set-Content (Join-Path $ReportDir '06-dump-analysis.txt')
-        } elseif ($dumpsToAnalyze.Count -eq 0) {
-            'No recent .dmp files in C:\Windows\Minidump to analyze.' |
-                Set-Content (Join-Path $ReportDir '06-dump-analysis.txt')
-        } else {
-            $out = New-Object System.Text.StringBuilder
-            foreach ($d in $dumpsToAnalyze) {
-                $null = $out.AppendLine("=== $($d.FullName) ($($d.LastWriteTime)) ===")
-                $analysis = & $cdb -z $d.FullName -c '!analyze -v;q' -lines -logo NUL 2>&1 | Out-String
-                $null = $out.AppendLine($analysis)
-                $null = $out.AppendLine('')
+            @'
+Windows Debugger (cdb.exe) not found. Install one of:
+
+  Option 1 (recommended - new WinDbg with modern UI):
+      winget install Microsoft.WinDbg
+
+  Option 2 (classic tools, part of the Windows SDK):
+      Install the Windows 10/11 SDK from
+      https://developer.microsoft.com/windows/downloads/windows-sdk/
+      Select "Debugging Tools for Windows" in the installer.
+
+Once installed, re-run system-diagnostics.ps1 - dumps will be
+analyzed automatically.
+'@ | Set-Content (Join-Path $ReportDir '06-dump-analysis.txt')
+            if ($dumpsToAnalyze.Count -gt 0) {
+                Add-Summary 'WARN' "Windows Debugger not installed - $($dumpsToAnalyze.Count) crash dump(s) not analyzed. See 06-dump-analysis.txt."
             }
-            Save-Text '06-dump-analysis.txt' $out.ToString()
-            Add-Summary 'OK' "Analyzed $($dumpsToAnalyze.Count) recent crash dumps via cdb.exe."
+            return
         }
+
+        if ($dumpsToAnalyze.Count -eq 0) {
+            "cdb.exe located at $cdb, but no recent .dmp files in C:\Windows\Minidump to analyze." |
+                Set-Content (Join-Path $ReportDir '06-dump-analysis.txt')
+            return
+        }
+
+        # Set up symbol cache pointing at Microsoft's public symbol server.
+        if (-not (Test-Path $DumpSymbolCache)) {
+            $null = New-Item -ItemType Directory -Path $DumpSymbolCache -Force
+        }
+        $symPath = "srv*$DumpSymbolCache*https://msdl.microsoft.com/download/symbols"
+
+        # Bug-check code lookup with plain-English hints.
+        $bugChecks = @{
+            '1'   = 'APC_INDEX_MISMATCH: kernel-mode driver issue.'
+            'A'   = 'IRQL_NOT_LESS_OR_EQUAL: driver accessed memory at wrong IRQL. Update or roll back recent drivers.'
+            '1A'  = 'MEMORY_MANAGEMENT: bad RAM, corrupt driver, or filesystem issue. Run Windows Memory Diagnostic (mdsched.exe).'
+            '1E'  = 'KMODE_EXCEPTION_NOT_HANDLED: kernel-mode exception. Usually a bad driver.'
+            '24'  = 'NTFS_FILE_SYSTEM: NTFS driver or disk corruption. Run chkdsk.'
+            '3B'  = 'SYSTEM_SERVICE_EXCEPTION: kernel service exception. Update drivers and check antivirus.'
+            '4E'  = 'PFN_LIST_CORRUPT: memory management corruption. Test RAM.'
+            '50'  = 'PAGE_FAULT_IN_NONPAGED_AREA: bad RAM or a driver referenced invalid memory.'
+            '7A'  = 'KERNEL_DATA_INPAGE_ERROR: bad sector, disk cable, or RAM issue. Run chkdsk.'
+            '7E'  = 'SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: system-thread exception, usually a driver.'
+            '7F'  = 'UNEXPECTED_KERNEL_MODE_TRAP: hardware fault, overclocking issue, or bad driver.'
+            '9C'  = 'MACHINE_CHECK_EXCEPTION: CPU hardware fault. Check temperatures and overclock settings.'
+            '9F'  = 'DRIVER_POWER_STATE_FAILURE: a driver did not complete a power transition. Update chipset / network drivers.'
+            'C1'  = 'SPECIAL_POOL_DETECTED_MEMORY_CORRUPTION: driver wrote past a buffer.'
+            'C2'  = 'BAD_POOL_CALLER: driver made an illegal pool call.'
+            'C5'  = 'DRIVER_CORRUPTED_EXPOOL: a driver corrupted kernel memory.'
+            'D1'  = 'DRIVER_IRQL_NOT_LESS_OR_EQUAL: driver bug at high IRQL.'
+            'EA'  = 'THREAD_STUCK_IN_DEVICE_DRIVER: driver hang, often graphics.'
+            'ED'  = 'UNMOUNTABLE_BOOT_VOLUME: boot drive corruption. Run chkdsk /r.'
+            'EF'  = 'CRITICAL_PROCESS_DIED: a critical Windows process ended (winlogon, csrss). Run sfc /scannow.'
+            'F4'  = 'CRITICAL_OBJECT_TERMINATION: a critical kernel object was terminated.'
+            '109' = 'CRITICAL_STRUCTURE_CORRUPTION: kernel structure corruption. Check disk, RAM, antivirus.'
+            '116' = 'VIDEO_TDR_ERROR: graphics driver hung. Update your GPU driver.'
+            '124' = 'WHEA_UNCORRECTABLE_ERROR: hardware error (CPU / RAM / motherboard). Not a Windows bug.'
+            '133' = 'DPC_WATCHDOG_VIOLATION: a driver hung. Update storage / chipset drivers.'
+            '139' = 'KERNEL_SECURITY_CHECK_FAILURE: kernel corruption. Check drivers and disk.'
+            '154' = 'UNEXPECTED_STORE_EXCEPTION: often failing SSD. Back up and check drive health.'
+            '1E7' = 'INVALID_FLOATING_POINT_STATE: driver / hardware issue.'
+        }
+
+        $out = New-Object System.Text.StringBuilder
+        $null = $out.AppendLine("Debugger : $cdb")
+        $null = $out.AppendLine("Sympath  : $symPath")
+        $null = $out.AppendLine('')
+
+        $analyzed = 0
+        foreach ($d in $dumpsToAnalyze) {
+            $null = $out.AppendLine('=' * 78)
+            $null = $out.AppendLine("Dump     : $($d.FullName)")
+            $null = $out.AppendLine("Size     : $([math]::Round($d.Length/1MB, 1)) MB   Written: $($d.LastWriteTime)")
+            $null = $out.AppendLine('=' * 78)
+
+            # Extended command batch. .sympath+ appends the symbol server,
+            # .reload -f forces reload, then verbose analysis, module list
+            # (with timestamps), and a 20-frame stack trace.
+            $cmds = ".sympath+ $symPath;.reload -f;!analyze -v;lmt;kn 20;q"
+
+            try {
+                $analysis = & $cdb -z $d.FullName -c $cmds -lines -logo NUL 2>&1 | Out-String
+            } catch {
+                $analysis = "ERROR running cdb: $($_.Exception.Message)"
+            }
+            $null = $out.AppendLine($analysis)
+            $null = $out.AppendLine('')
+
+            # Extract insights from the analysis output.
+            $bugCode = $null; $moduleName = $null; $processName = $null; $bucket = $null
+            if ($analysis -match 'BUGCHECK_CODE:\s*(?:0x)?([0-9a-fA-F]+)') {
+                $trim = $Matches[1].TrimStart('0').ToUpper()
+                if ($trim -eq '') { $trim = '0' }
+                $bugCode = $trim
+            } elseif ($analysis -match 'BugCheck\s+([0-9a-fA-F]+)\b') {
+                $bugCode = $Matches[1].TrimStart('0').ToUpper()
+            }
+            if ($analysis -match 'MODULE_NAME:\s*(\S+)')       { $moduleName  = $Matches[1] }
+            if ($analysis -match 'PROCESS_NAME:\s*(\S+)')      { $processName = $Matches[1] }
+            if ($analysis -match 'FAILURE_BUCKET_ID:\s*(\S+)') { $bucket      = $Matches[1] }
+
+            $label = Split-Path $d.FullName -Leaf
+            $facts = @()
+            if ($bugCode)     { $facts += "bugcheck 0x$bugCode" }
+            if ($moduleName)  { $facts += "module=$moduleName" }
+            if ($processName) { $facts += "process=$processName" }
+            $factStr = if ($facts.Count -gt 0) { ' - ' + ($facts -join ' ') } else { '' }
+
+            if ($bugCode -and $bugChecks.ContainsKey($bugCode)) {
+                Add-Summary 'FAIL' ("Dump ${label}${factStr}: " + $bugChecks[$bugCode])
+            } elseif ($bugCode) {
+                Add-Summary 'WARN' ("Dump ${label}${factStr}: unknown bug-check code (see 06-dump-analysis.txt).")
+            } elseif ($bucket) {
+                Add-Summary 'WARN' ("Dump ${label} bucket=$bucket - manual review required.")
+            } else {
+                Add-Summary 'WARN' ("Dump ${label} analyzed but no bug-check extracted.")
+            }
+            $analyzed++
+        }
+
+        Save-Text '06-dump-analysis.txt' $out.ToString()
+        Add-Summary 'OK' ("Analyzed $analyzed dump(s) via $(Split-Path $cdb -Leaf) with MS public symbols.")
     }
 
     # -----------------------------------------------------------------------
@@ -1435,7 +1571,8 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
     Invoke-SystemDiagnostics -ReportDir $ReportDir -EventLogDays $EventLogDays `
         -Endpoints $Endpoints -WerKeywords $WerKeywords -IncludeMiniDumps:$IncludeMiniDumps `
-        -CaptureNetSeconds $CaptureNetSeconds -PerfSampleSeconds $PerfSampleSeconds
+        -CaptureNetSeconds $CaptureNetSeconds -PerfSampleSeconds $PerfSampleSeconds `
+        -AnalyzeKernelDump:$AnalyzeKernelDump -DumpSymbolCache $DumpSymbolCache
     if (-not $NoFinalize) {
         Finalize-Report -ReportDir $ReportDir -Project $ProjectName -Sanitize:$Sanitize
     }

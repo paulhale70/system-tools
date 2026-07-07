@@ -15,6 +15,7 @@ public sealed class DiagnosticsRunner
         bool IncludeMiniDumps = false,
         int CaptureNetSeconds = 0,
         int PerfSampleSeconds = 5,
+        bool AnalyzeKernelDump = false,
         string ProjectName = "System");
 
     public string ScriptPath { get; }
@@ -69,6 +70,7 @@ public sealed class DiagnosticsRunner
         }
         args.Add("-PerfSampleSeconds");
         args.Add(options.PerfSampleSeconds.ToString());
+        if (options.AnalyzeKernelDump) args.Add("-AnalyzeKernelDump");
 
         var psi = new ProcessStartInfo("powershell.exe", string.Join(' ', args))
         {

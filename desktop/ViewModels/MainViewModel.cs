@@ -17,6 +17,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _includeMiniDumps;
     private string _captureNetSeconds = "0";
     private string _perfSampleSeconds = "5";
+    private bool _analyzeKernelDump;
     private string _statusMessage = "Ready.";
     private RunHistoryEntry? _selectedRun;
     private NavTab _selectedTab = NavTab.Run;
@@ -73,6 +74,7 @@ public sealed class MainViewModel : ViewModelBase
     public bool IncludeMiniDumpsEnabled { get => _includeMiniDumps; set => Set(ref _includeMiniDumps, value); }
     public string CaptureNetSeconds     { get => _captureNetSeconds; set => Set(ref _captureNetSeconds, value); }
     public string PerfSampleSeconds     { get => _perfSampleSeconds; set => Set(ref _perfSampleSeconds, value); }
+    public bool AnalyzeKernelDumpEnabled { get => _analyzeKernelDump; set => Set(ref _analyzeKernelDump, value); }
     public string StatusMessage         { get => _statusMessage;    set => Set(ref _statusMessage, value); }
 
     // --- Navigation ---------------------------------------------------------
@@ -116,7 +118,8 @@ public sealed class MainViewModel : ViewModelBase
                 Sanitize: SanitizeEnabled,
                 IncludeMiniDumps: IncludeMiniDumpsEnabled,
                 CaptureNetSeconds: seconds,
-                PerfSampleSeconds: perfSeconds);
+                PerfSampleSeconds: perfSeconds,
+                AnalyzeKernelDump: AnalyzeKernelDumpEnabled);
 
             var exit = await _runner.RunAsync(opts, line =>
             {

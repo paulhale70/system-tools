@@ -25,6 +25,10 @@
                 <CheckBox Content="Include crash dumps"
                           Margin="16,0,0,0" VerticalAlignment="Center"
                           IsChecked="{Binding IncludeMiniDumpsEnabled}" />
+                <CheckBox Content="Analyze kernel dump (slow)"
+                          ToolTip="Runs WinDbg !analyze -v against C:\Windows\MEMORY.DMP when present. Can take minutes."
+                          Margin="16,0,0,0" VerticalAlignment="Center"
+                          IsChecked="{Binding AnalyzeKernelDumpEnabled}" />
                 <TextBlock Text="Network capture:"
                            Margin="20,0,6,0" VerticalAlignment="Center"
                            Foreground="{StaticResource MutedBrush}" />
