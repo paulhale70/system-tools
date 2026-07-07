@@ -16,6 +16,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _sanitize;
     private bool _includeMiniDumps;
     private string _captureNetSeconds = "0";
+    private string _perfSampleSeconds = "5";
     private string _statusMessage = "Ready.";
     private RunHistoryEntry? _selectedRun;
     private NavTab _selectedTab = NavTab.Run;
@@ -71,6 +72,7 @@ public sealed class MainViewModel : ViewModelBase
     public bool SanitizeEnabled         { get => _sanitize;         set => Set(ref _sanitize, value); }
     public bool IncludeMiniDumpsEnabled { get => _includeMiniDumps; set => Set(ref _includeMiniDumps, value); }
     public string CaptureNetSeconds     { get => _captureNetSeconds; set => Set(ref _captureNetSeconds, value); }
+    public string PerfSampleSeconds     { get => _perfSampleSeconds; set => Set(ref _perfSampleSeconds, value); }
     public string StatusMessage         { get => _statusMessage;    set => Set(ref _statusMessage, value); }
 
     // --- Navigation ---------------------------------------------------------
@@ -108,10 +110,13 @@ public sealed class MainViewModel : ViewModelBase
         {
             int seconds = int.TryParse(CaptureNetSeconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var s)
                 ? Math.Max(0, s) : 0;
+            int perfSeconds = int.TryParse(PerfSampleSeconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ps)
+                ? Math.Max(0, ps) : 5;
             var opts = new DiagnosticsRunner.Options(
                 Sanitize: SanitizeEnabled,
                 IncludeMiniDumps: IncludeMiniDumpsEnabled,
-                CaptureNetSeconds: seconds);
+                CaptureNetSeconds: seconds,
+                PerfSampleSeconds: perfSeconds);
 
             var exit = await _runner.RunAsync(opts, line =>
             {

@@ -46,6 +46,12 @@
     Run 'netsh trace' for the given number of seconds and bundle the
     resulting .etl. Off when 0 (default). Requires elevation.
 
+.PARAMETER PerfSampleSeconds
+    Take a Task-Manager-style performance sample for the given number
+    of seconds: CPU / memory / disk / network counters plus a top-30
+    process ranking by CPU delta during the window. Default: 5.
+    Pass 0 to skip.
+
 .PARAMETER Sanitize
     Redact obvious PII (username, computer name, MAC addresses, private
     IPs, user profile path) from all text files before zipping. Useful
@@ -68,6 +74,7 @@ param(
     [string]$WerKeywords       = 'python|pythonw',
     [switch]$IncludeMiniDumps,
     [int]$CaptureNetSeconds    = 0,
+    [int]$PerfSampleSeconds    = 5,
     [switch]$Sanitize,
     [string]$ReportDir,
     [switch]$NoFinalize
@@ -77,7 +84,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
 $script:TOOL_NAME    = 'System-tools diagnostics'
-$script:TOOL_VERSION = '1.0.0'
+$script:TOOL_VERSION = '1.2.0'
 $script:HISTORY_PATH = Join-Path $env:USERPROFILE 'diagnostics-history.json'
 
 # ---------------------------------------------------------------------------
@@ -651,7 +658,8 @@ function Invoke-SystemDiagnostics {
         [string[]]$Endpoints   = @(),
         [string]$WerKeywords   = 'python|pythonw',
         [switch]$IncludeMiniDumps,
-        [int]$CaptureNetSeconds = 0
+        [int]$CaptureNetSeconds = 0,
+        [int]$PerfSampleSeconds = 5
     )
     $script:reportDir = $ReportDir
     $since = (Get-Date).AddDays(-$EventLogDays)
@@ -1100,6 +1108,103 @@ function Invoke-SystemDiagnostics {
             Set-Content (Join-Path $ReportDir '08-hid-devices.txt')
     }
 
+    if ($PerfSampleSeconds -gt 0) {
+        # -------------------------------------------------------------------
+        # 8b. Task Manager snapshot: performance counters + process ranking
+        # -------------------------------------------------------------------
+        # Snapshots what Task Manager shows on the Performance and Processes
+        # tabs. Runs synchronously so PerfSampleSeconds adds to total wall
+        # time (default 5s + 2s process delta).
+        Write-Host "  (Task Manager sample: $PerfSampleSeconds s)" -ForegroundColor DarkGray
+
+        Try-Run 'Task Manager: performance counters' {
+            $counters = @(
+                '\Processor(_Total)\% Processor Time'
+                '\Memory\Available MBytes'
+                '\Memory\% Committed Bytes In Use'
+                '\PhysicalDisk(_Total)\% Disk Time'
+                '\PhysicalDisk(_Total)\Disk Read Bytes/sec'
+                '\PhysicalDisk(_Total)\Disk Write Bytes/sec'
+                '\Network Interface(*)\Bytes Total/sec'
+            )
+            $samples = Get-Counter -Counter $counters -SampleInterval 1 `
+                                   -MaxSamples $PerfSampleSeconds -ErrorAction SilentlyContinue
+            if (-not $samples) {
+                'Get-Counter returned no samples (localized counter names may differ on non-English Windows).' |
+                    Set-Content (Join-Path $ReportDir '08-taskmgr-counters.csv')
+                Add-Summary 'WARN' 'Task Manager performance counters unavailable on this system.'
+                return
+            }
+
+            $rows = foreach ($sample in $samples) {
+                foreach ($val in $sample.CounterSamples) {
+                    [PSCustomObject]@{
+                        Timestamp = $sample.Timestamp.ToString('o')
+                        Counter   = $val.Path
+                        Value     = [math]::Round([double]$val.CookedValue, 2)
+                    }
+                }
+            }
+            $rows | Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '08-taskmgr-counters.csv')
+
+            $cpuVals    = $rows | Where-Object { $_.Counter -match '% Processor Time' } | ForEach-Object Value
+            $memVals    = $rows | Where-Object { $_.Counter -match 'Available MBytes' } | ForEach-Object Value
+            $commitVals = $rows | Where-Object { $_.Counter -match '% Committed Bytes In Use' } | ForEach-Object Value
+            $cpuAvg    = if ($cpuVals)    { ($cpuVals    | Measure-Object -Average).Average } else { 0 }
+            $memAvg    = if ($memVals)    { ($memVals    | Measure-Object -Average).Average } else { 0 }
+            $commitAvg = if ($commitVals) { ($commitVals | Measure-Object -Average).Average } else { 0 }
+
+            if ($cpuAvg -gt 80) {
+                Add-Summary 'WARN' ("CPU busy: {0:N1}% average over {1}s sample." -f $cpuAvg, $PerfSampleSeconds)
+            } else {
+                Add-Summary 'OK' ("CPU load {0:N1}% average over {1}s sample." -f $cpuAvg, $PerfSampleSeconds)
+            }
+            if ($memAvg -gt 0 -and $memAvg -lt 500) {
+                Add-Summary 'WARN' ("Low free memory: only {0:N0} MB available on average." -f $memAvg)
+            }
+            if ($commitAvg -gt 90) {
+                Add-Summary 'WARN' ("Memory commit high: {0:N1}% - system may swap." -f $commitAvg)
+            }
+        }
+
+        Try-Run 'Task Manager: processes by CPU delta' {
+            $window = 2   # short window just for the CPU-delta ranking
+            $before = @{}
+            foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
+                if ($p.CPU) { $before[$p.Id] = [double]$p.CPU }
+            }
+            Start-Sleep -Seconds $window
+
+            $cores = [Environment]::ProcessorCount
+            $rows = foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
+                $b = $before[$p.Id]
+                if ($b -eq $null) { continue }
+                $delta = [double]$p.CPU - $b
+                $pct = if ($window -gt 0 -and $cores -gt 0) {
+                    ($delta / $window) / $cores * 100
+                } else { 0 }
+                [PSCustomObject]@{
+                    Name         = $p.ProcessName
+                    Id           = $p.Id
+                    CPUPct       = [math]::Round($pct, 2)
+                    WorkingSetMB = [math]::Round($p.WorkingSet64 / 1MB, 1)
+                    Threads      = $p.Threads.Count
+                    Handles      = $p.HandleCount
+                    StartTime    = $p.StartTime
+                    Path         = $p.Path
+                }
+            }
+            $top = $rows | Sort-Object CPUPct -Descending | Select-Object -First 30
+            $top | Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '08-taskmgr-processes.csv')
+
+            $hogs = $top | Where-Object { $_.CPUPct -gt 50 }
+            if ($hogs) {
+                $labels = ($hogs | ForEach-Object { "$($_.Name) ($($_.CPUPct)%)" }) -join ', '
+                Add-Summary 'WARN' "High-CPU processes during sample: $labels"
+            }
+        }
+    }
+
     # -----------------------------------------------------------------------
     # 9. Network: adapters, TCP, DNS client, plus targeted probes
     # -----------------------------------------------------------------------
@@ -1330,7 +1435,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
     Invoke-SystemDiagnostics -ReportDir $ReportDir -EventLogDays $EventLogDays `
         -Endpoints $Endpoints -WerKeywords $WerKeywords -IncludeMiniDumps:$IncludeMiniDumps `
-        -CaptureNetSeconds $CaptureNetSeconds
+        -CaptureNetSeconds $CaptureNetSeconds -PerfSampleSeconds $PerfSampleSeconds
     if (-not $NoFinalize) {
         Finalize-Report -ReportDir $ReportDir -Project $ProjectName -Sanitize:$Sanitize
     }

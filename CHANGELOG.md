@@ -4,6 +4,42 @@ All notable changes to this repository will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-06-10
+
+### diagnostics/
+
+- **Task Manager snapshot** captured on every run. Adds two new
+  files to the report:
+  - `08-taskmgr-counters.csv` - `Get-Counter` samples of Processor
+    Time, Available MBytes, Committed Bytes %, PhysicalDisk % Time,
+    Disk Read/Write Bytes/sec, and Network Interface Bytes/sec at
+    1-second intervals.
+  - `08-taskmgr-processes.csv` - top 30 processes ranked by CPU
+    delta over a short window (name, PID, CPU %, working set,
+    thread and handle counts, start time, path).
+- New `-PerfSampleSeconds N` parameter (default `5`, `0` to skip)
+  controls the counter sample duration.
+- Summary auto-flags: **WARN** when average CPU > 80% during the
+  sample, when free memory dips below 500 MB, when committed
+  memory exceeds 90%, or when any single process burned > 50% CPU
+  during the window.
+- Falls back gracefully on non-English Windows where counter paths
+  are localized (records a WARN in the summary and skips the CSV).
+
+### desktop/
+
+- **Run** tab gains a "Task Manager sample: N seconds (0 = off)"
+  input beside the existing Network capture control. Value is
+  forwarded to `system-diagnostics.ps1` as `-PerfSampleSeconds`.
+- `DiagnosticsRunner.Options` grows a `PerfSampleSeconds` field
+  (default 5).
+- Assembly version bumped to 1.2.0.
+
+### media-inventory/
+
+- `app-diagnostics.ps1` gains `-PerfSampleSeconds` and forwards it
+  through to `Invoke-SystemDiagnostics`.
+
 ## [1.1.0] - 2026-06-04
 
 ### web/ (new)

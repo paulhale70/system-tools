@@ -28,6 +28,11 @@
 .PARAMETER CaptureNetSeconds
     Run 'netsh trace' for the given number of seconds and bundle the
     resulting .etl. Off when 0 (default). Requires elevation.
+
+.PARAMETER PerfSampleSeconds
+    Task-Manager-style performance sample duration in seconds
+    (CPU / memory / disk / network counters + top-30 processes by
+    CPU delta). Default: 5. Pass 0 to skip.
 #>
 
 [CmdletBinding()]
@@ -36,7 +41,8 @@ param(
     [int]$EventLogDays       = 7,
     [switch]$Sanitize,
     [switch]$IncludeMiniDumps,
-    [int]$CaptureNetSeconds  = 0
+    [int]$CaptureNetSeconds  = 0,
+    [int]$PerfSampleSeconds  = 5
 )
 
 $ErrorActionPreference = 'Continue'
@@ -56,7 +62,8 @@ $endpoints = @(
 $reportDir = Initialize-Report -OutputRoot $OutputRoot -ProjectName 'MediaInventory'
 Invoke-SystemDiagnostics -ReportDir $reportDir -EventLogDays $EventLogDays `
     -Endpoints $endpoints -WerKeywords 'python|pythonw|main\.py|media_inventory' `
-    -IncludeMiniDumps:$IncludeMiniDumps -CaptureNetSeconds $CaptureNetSeconds
+    -IncludeMiniDumps:$IncludeMiniDumps -CaptureNetSeconds $CaptureNetSeconds `
+    -PerfSampleSeconds $PerfSampleSeconds
 
 # ---------------------------------------------------------------------------
 # App-specific sections

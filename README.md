@@ -1,6 +1,6 @@
 # System-tools
 
-Version **1.1.0** &middot;
+Version **1.2.0** &middot;
 [CHANGELOG](CHANGELOG.md) &middot;
 [LICENSE](LICENSE) (MIT)
 

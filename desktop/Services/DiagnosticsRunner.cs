@@ -14,6 +14,7 @@ public sealed class DiagnosticsRunner
         bool Sanitize = false,
         bool IncludeMiniDumps = false,
         int CaptureNetSeconds = 0,
+        int PerfSampleSeconds = 5,
         string ProjectName = "System");
 
     public string ScriptPath { get; }
@@ -66,6 +67,8 @@ public sealed class DiagnosticsRunner
             args.Add("-CaptureNetSeconds");
             args.Add(options.CaptureNetSeconds.ToString());
         }
+        args.Add("-PerfSampleSeconds");
+        args.Add(options.PerfSampleSeconds.ToString());
 
         var psi = new ProcessStartInfo("powershell.exe", string.Join(' ', args))
         {

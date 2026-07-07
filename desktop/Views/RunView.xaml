@@ -33,6 +33,14 @@
                 <TextBlock Text="seconds (0 = off)"
                            Margin="6,0,0,0" VerticalAlignment="Center"
                            Foreground="{StaticResource MutedBrush}" />
+                <TextBlock Text="Task Manager sample:"
+                           Margin="20,0,6,0" VerticalAlignment="Center"
+                           Foreground="{StaticResource MutedBrush}" />
+                <TextBox Width="60" VerticalAlignment="Center" VerticalContentAlignment="Center"
+                         Text="{Binding PerfSampleSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock Text="seconds (0 = off)"
+                           Margin="6,0,0,0" VerticalAlignment="Center"
+                           Foreground="{StaticResource MutedBrush}" />
             </StackPanel>
         </Border>
 
