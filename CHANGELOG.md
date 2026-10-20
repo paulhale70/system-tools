@@ -4,7 +4,42 @@ All notable changes to this repository will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/).
 
-## [1.4.0] - Unreleased
+## [1.4.1] - Unreleased
+
+Crash-dump analysis works for the first time. Tested against real
+LiveKernelReports dumps on a Windows 11 machine with the Store WinDbg.
+
+### diagnostics/
+
+- **Fix: `!analyze` never ran.** The command batch started with
+  `.sympath+ <path>;.reload -f;!analyze -v;...`, and `.sympath` takes the
+  rest of the line as the path, so every later command was read as one
+  more symbol folder. The symbol path now goes in cdb's `-y` option.
+- **Fix: the Store WinDbg could not be used.** Windows refuses to start
+  `cdb.exe` from `WindowsApps` ("Access is denied", even elevated), and
+  it was the first debugger the script tried. Debuggers that run in place
+  (Windows SDK, legacy Debugging Tools) are now preferred; the Store
+  WinDbg's debugger folder (~135 MB) is copied once per version to
+  `%LOCALAPPDATA%\SystemTools\windbg\` and run from there.
+- **Fix: failures were reported as success.** A dump the debugger could
+  not open still counted toward `[OK] Analyzed N dump(s)`; it now gets a
+  WARN with the reason, and the OK line only counts real analyses.
+- **Fix: run trends errored on every run.** `Get-RunTrends` had a
+  parameter named `$Host`, PowerShell's read-only automatic variable
+  (`VariableNotWritable`); renamed to `$HostName`.
+- Recent `C:\Windows\LiveKernelReports` dumps (under 256 MB) are analyzed
+  too. They record hangs Windows recovered from, so they are reported as
+  WARN and marked "(live dump)", with their own fix hint instead of the
+  kernel-crash one.
+- Plain-English hints for graphics and live-dump codes 0x117, 0x141,
+  0x15C, 0x1A8 and 0x1B8.
+- The kernel-crash fix hint now matches identified bug-checks
+  ("bugcheck 0x7E", which it missed before) and no longer matches live
+  dumps.
+- `TOOL_VERSION` 1.4.1; DIAGNOSTICS.md documents the dump sources and
+  debugger options.
+
+## [1.4.0] - 2026-10-19
 
 One tool instead of three: `desktop/`, `diagnostics/` and `web/` now
 ship together as a single `SystemTools.Desktop.exe`.

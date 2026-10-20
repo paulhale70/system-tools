@@ -96,7 +96,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
 $script:TOOL_NAME    = 'System-tools diagnostics'
-$script:TOOL_VERSION = '1.4.0'
+$script:TOOL_VERSION = '1.4.1'
 $script:HISTORY_PATH = Join-Path $env:USERPROFILE 'diagnostics-history.json'
 
 # ---------------------------------------------------------------------------
@@ -184,7 +184,9 @@ function Get-LikelyFixes {
     param([string[]]$SummaryLines)
     # Each rule: regex matched against summary text -> plain-English fix.
     $rules = @(
-        @{ Pattern = 'bug-check|BSOD|MEMORY\.DMP'                            ; Fix = 'Recent kernel crashes detected. Causes are usually a bad driver or failing RAM. Update graphics/storage drivers, then run Windows Memory Diagnostic (mdsched.exe).' }
+        # Per line ((?m)), so a live dump (a recovered hang) does not count as a kernel crash.
+        @{ Pattern = '(?m)^(?!.*live dump).*(bug-?check|BSOD|MEMORY\.DMP)'   ; Fix = 'Recent kernel crashes detected. Causes are usually a bad driver or failing RAM. Update graphics/storage drivers, then run Windows Memory Diagnostic (mdsched.exe).' }
+        @{ Pattern = '\(live dump\)'                                          ; Fix = 'Windows recovered from a hang and saved a live dump. This usually points at a graphics or chipset driver: update both from the PC or GPU maker.' }
         @{ Pattern = 'app crash|crash/hang'                                   ; Fix = 'One or more applications crashed recently. Reinstall the failing app and check for Windows + .NET updates.' }
         @{ Pattern = 'physical disk.*not healthy'                             ; Fix = 'A physical disk reports as unhealthy. Back up your data immediately and consider replacing the drive.' }
         @{ Pattern = 'Clock skew is'                                          ; Fix = 'System clock is out of sync. Fix it under Settings > Time and language > Date and time > Sync now.' }
@@ -457,7 +459,9 @@ function Save-RunHistory {
 function Get-RunTrends {
     param(
         [string]$Project,
-        [string]$Host = $env:COMPUTERNAME
+        # Not $Host: that is PowerShell's read-only automatic variable, and
+        # binding to it threw VariableNotWritable on every run.
+        [string]$HostName = $env:COMPUTERNAME
     )
     if (-not (Test-Path $script:HISTORY_PATH)) { return $null }
     try {
@@ -465,7 +469,7 @@ function Get-RunTrends {
         $history = @($raw | ConvertFrom-Json)
     } catch { return $null }
 
-    $relevant = @($history | Where-Object { $_.host -eq $Host -and $_.project -eq $Project })
+    $relevant = @($history | Where-Object { $_.host -eq $HostName -and $_.project -eq $Project })
     if ($relevant.Count -lt 2) {
         return [PSCustomObject]@{
             Total       = $relevant.Count
@@ -972,30 +976,65 @@ function Invoke-SystemDiagnostics {
     }
 
     Try-Run 'WinDbg crash dump analysis' {
-        # Expanded cdb.exe search. Covers:
-        #   - Latest WinDbg (Microsoft Store, new UI)
-        #   - Windows SDK 10/11 Debugging Tools (x64 + x86)
-        #   - Legacy "Debugging Tools for Windows"
+        # cdb.exe search, debuggers that can be run in place first:
+        #   - Windows SDK 10/11 Debugging Tools (x64), legacy "Debugging
+        #     Tools for Windows", WinDbg installed outside the Store
+        #   - WinDbg from the Microsoft Store (winget install Microsoft.WinDbg).
+        #     Windows refuses to start its cdb.exe from WindowsApps ("Access is
+        #     denied", even elevated), so its debugger folder (~135 MB) is
+        #     copied once per WinDbg version under %LOCALAPPDATA%\SystemTools.
+        #   - x86 SDK tools as a last resort
         $cdbSearch = @(
-            'C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe'
-            'C:\Program Files\WinDbg\CurrentVersion\Contents\amd64\cdb.exe'
             'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
             'C:\Program Files (x86)\Windows Kits\11\Debuggers\x64\cdb.exe'
             'C:\Program Files\Debugging Tools for Windows (x64)\cdb.exe'
+            'C:\Program Files\WinDbg\CurrentVersion\Contents\amd64\cdb.exe'
+            'C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe'
             'C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe'
         )
         $cdb = $null
         foreach ($pattern in $cdbSearch) {
-            $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $cdb = $found.FullName; break }
+            $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $found) { continue }
+            if ($found.FullName -notlike '*\WindowsApps\*') { $cdb = $found.FullName; break }
+
+            $srcDir   = Split-Path $found.FullName
+            $pkg      = Split-Path (Split-Path $srcDir) -Leaf   # Microsoft.WinDbg_<version>_x64__<id>
+            $copyRoot = Join-Path $env:LOCALAPPDATA 'SystemTools\windbg'
+            $copyDir  = Join-Path $copyRoot $pkg
+            if (-not (Test-Path (Join-Path $copyDir 'cdb.exe'))) {
+                Write-Host "  Copying the Store WinDbg debugger to $copyDir (one time, ~135 MB)..."
+                $partial = "$copyDir.partial"
+                if (Test-Path $partial) { Remove-Item $partial -Recurse -Force }
+                $null = New-Item -ItemType Directory -Path $copyRoot -Force
+                Copy-Item $srcDir $partial -Recurse -Force -ErrorAction Stop
+                Rename-Item $partial (Split-Path $copyDir -Leaf)
+                # Drop copies of older WinDbg versions.
+                Get-ChildItem $copyRoot -Directory |
+                    Where-Object { $_.FullName -ne $copyDir } |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            $cdb = Join-Path $copyDir 'cdb.exe'
+            break
         }
 
-        # Recent minidumps.
+        # Recent minidumps (blue screens), recent LiveKernelReports dumps
+        # (hangs Windows recovered from, e.g. graphics timeouts), and
+        # optionally the full kernel dump.
+        $since = (Get-Date).AddDays(-30)
         $dumpsToAnalyze = @()
         $minidumpDir = 'C:\Windows\Minidump'
         if (Test-Path $minidumpDir) {
             $dumpsToAnalyze += Get-ChildItem $minidumpDir -File -Filter '*.dmp' -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-30) } |
+                Where-Object { $_.LastWriteTime -gt $since } |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 3
+        }
+        $liveDumpDir = 'C:\Windows\LiveKernelReports'
+        if (Test-Path $liveDumpDir) {
+            # Live dumps can be several GB; only the small ones analyze quickly.
+            $dumpsToAnalyze += Get-ChildItem $liveDumpDir -File -Filter '*.dmp' -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -gt $since -and $_.Length -lt 256MB } |
                 Sort-Object LastWriteTime -Descending | Select-Object -First 3
         }
         if ($AnalyzeKernelDump -and (Test-Path 'C:\Windows\MEMORY.DMP')) {
@@ -1008,6 +1047,9 @@ Windows Debugger (cdb.exe) not found. Install one of:
 
   Option 1 (recommended - new WinDbg with modern UI):
       winget install Microsoft.WinDbg
+      (The first analysis copies its debugger, ~135 MB, to
+      %LOCALAPPDATA%\SystemTools\windbg, because Windows will not let
+      scripts start it from the Store folder.)
 
   Option 2 (classic tools, part of the Windows SDK):
       Install the Windows 10/11 SDK from
@@ -1024,7 +1066,7 @@ analyzed automatically.
         }
 
         if ($dumpsToAnalyze.Count -eq 0) {
-            "cdb.exe located at $cdb, but no recent .dmp files in C:\Windows\Minidump to analyze." |
+            "cdb.exe located at $cdb, but no .dmp files from the last 30 days in C:\Windows\Minidump or C:\Windows\LiveKernelReports to analyze." |
                 Set-Content (Join-Path $ReportDir '06-dump-analysis.txt')
             return
         }
@@ -1060,6 +1102,11 @@ analyzed automatically.
             'F4'  = 'CRITICAL_OBJECT_TERMINATION: a critical kernel object was terminated.'
             '109' = 'CRITICAL_STRUCTURE_CORRUPTION: kernel structure corruption. Check disk, RAM, antivirus.'
             '116' = 'VIDEO_TDR_ERROR: graphics driver hung. Update your GPU driver.'
+            '117' = 'VIDEO_TDR_TIMEOUT_DETECTED: graphics driver stopped responding and Windows recovered it. Update your GPU driver.'
+            '141' = 'VIDEO_ENGINE_TIMEOUT_DETECTED: a GPU engine hung and was reset. Update your GPU driver and check GPU temperatures.'
+            '15C' = 'PDC_WATCHDOG_TIMEOUT_LIVEDUMP: a component hung during sleep or wake. Update chipset and graphics drivers.'
+            '1A8' = 'VIDEO_DXGKRNL_BLACK_SCREEN_LIVEDUMP: the screen went black and the power button was held to recover. Points at the graphics driver or display connection.'
+            '1B8' = 'VIDEO_MINIPORT_BLACK_SCREEN_LIVEDUMP: the screen went black and the power button was held to recover. Points at the graphics driver or display connection.'
             '124' = 'WHEA_UNCORRECTABLE_ERROR: hardware error (CPU / RAM / motherboard). Not a Windows bug.'
             '133' = 'DPC_WATCHDOG_VIOLATION: a driver hung. Update storage / chipset drivers.'
             '139' = 'KERNEL_SECURITY_CHECK_FAILURE: kernel corruption. Check drivers and disk.'
@@ -1079,15 +1126,22 @@ analyzed automatically.
             $null = $out.AppendLine("Size     : $([math]::Round($d.Length/1MB, 1)) MB   Written: $($d.LastWriteTime)")
             $null = $out.AppendLine('=' * 78)
 
-            # Extended command batch. .sympath+ appends the symbol server,
-            # .reload -f forces reload, then verbose analysis, module list
-            # (with timestamps), and a 20-frame stack trace.
-            $cmds = ".sympath+ $symPath;.reload -f;!analyze -v;lmt;kn 20;q"
+            # The symbol path goes in -y, not in a .sympath command: .sympath
+            # takes the rest of the line as the path, so every command after
+            # it was read as one more symbol folder and !analyze never ran.
+            # Then: force symbol reload, verbose analysis, module list (with
+            # timestamps), and a 20-frame stack trace.
+            $cmds = '.reload -f;!analyze -v;lmt;kn 20;q'
+            $label = Split-Path $d.FullName -Leaf
 
             try {
-                $analysis = & $cdb -z $d.FullName -c $cmds -lines -logo NUL 2>&1 | Out-String
+                $analysis = & $cdb -z $d.FullName -y $symPath -c $cmds -lines -logo NUL 2>&1 | Out-String
             } catch {
-                $analysis = "ERROR running cdb: $($_.Exception.Message)"
+                $null = $out.AppendLine("ERROR running cdb: $($_.Exception.Message)")
+                $null = $out.AppendLine('')
+                $why = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+                Add-Summary 'WARN' "Dump ${label} not analyzed: could not run $(Split-Path $cdb -Leaf) ($why). See 06-dump-analysis.txt."
+                continue
             }
             $null = $out.AppendLine($analysis)
             $null = $out.AppendLine('')
@@ -1105,15 +1159,18 @@ analyzed automatically.
             if ($analysis -match 'PROCESS_NAME:\s*(\S+)')      { $processName = $Matches[1] }
             if ($analysis -match 'FAILURE_BUCKET_ID:\s*(\S+)') { $bucket      = $Matches[1] }
 
-            $label = Split-Path $d.FullName -Leaf
             $facts = @()
             if ($bugCode)     { $facts += "bugcheck 0x$bugCode" }
             if ($moduleName)  { $facts += "module=$moduleName" }
             if ($processName) { $facts += "process=$processName" }
             $factStr = if ($facts.Count -gt 0) { ' - ' + ($facts -join ' ') } else { '' }
 
+            # A live dump records a hang Windows recovered from, not a crash.
+            $isLive = $d.FullName.StartsWith($liveDumpDir + '\', [StringComparison]::OrdinalIgnoreCase)
+            if ($isLive) { $label = "$label (live dump)" }
+
             if ($bugCode -and $bugChecks.ContainsKey($bugCode)) {
-                Add-Summary 'FAIL' ("Dump ${label}${factStr}: " + $bugChecks[$bugCode])
+                Add-Summary $(if ($isLive) { 'WARN' } else { 'FAIL' }) ("Dump ${label}${factStr}: " + $bugChecks[$bugCode])
             } elseif ($bugCode) {
                 Add-Summary 'WARN' ("Dump ${label}${factStr}: unknown bug-check code (see 06-dump-analysis.txt).")
             } elseif ($bucket) {
@@ -1125,7 +1182,9 @@ analyzed automatically.
         }
 
         Save-Text '06-dump-analysis.txt' $out.ToString()
-        Add-Summary 'OK' ("Analyzed $analyzed dump(s) via $(Split-Path $cdb -Leaf) with MS public symbols.")
+        if ($analyzed -gt 0) {
+            Add-Summary 'OK' ("Analyzed $analyzed dump(s) via $(Split-Path $cdb -Leaf) with MS public symbols.")
+        }
     }
 
     # -----------------------------------------------------------------------
