@@ -96,7 +96,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
 $script:TOOL_NAME    = 'System-tools diagnostics'
-$script:TOOL_VERSION = '1.3.0'
+$script:TOOL_VERSION = '1.4.0'
 $script:HISTORY_PATH = Join-Path $env:USERPROFILE 'diagnostics-history.json'
 
 # ---------------------------------------------------------------------------
@@ -448,7 +448,9 @@ function Save-RunHistory {
     if ($history.Count -gt 100) {
         $history = $history[($history.Count - 100)..($history.Count - 1)]
     }
-    $history | ConvertTo-Json -Depth 6 | Set-Content -Path $script:HISTORY_PATH -Encoding UTF8
+    # -InputObject keeps a one-entry history as a JSON array; piping
+    # unrolls it into a bare object, which readers then reject.
+    ConvertTo-Json -InputObject @($history) -Depth 6 | Set-Content -Path $script:HISTORY_PATH -Encoding UTF8
     return $entry
 }
 

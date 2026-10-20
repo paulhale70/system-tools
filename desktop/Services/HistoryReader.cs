@@ -28,16 +28,40 @@ public sealed class HistoryReader
 
     public IReadOnlyList<RunHistoryEntry> Load()
     {
-        if (!File.Exists(HistoryPath)) return Array.Empty<RunHistoryEntry>();
+        var json = ReadJsonArray();
         try
         {
-            var json = File.ReadAllText(HistoryPath);
             var arr = JsonSerializer.Deserialize<RunHistoryEntry[]>(json, Options);
             return arr ?? Array.Empty<RunHistoryEntry>();
         }
         catch (JsonException)
         {
             return Array.Empty<RunHistoryEntry>();
+        }
+    }
+
+    /// <summary>
+    /// The history file as a JSON array string ("[]" when missing or
+    /// unreadable). Collectors before 1.4.0 wrote a bare object after the
+    /// very first run; that is wrapped into a one-element array.
+    /// </summary>
+    public string ReadJsonArray()
+    {
+        if (!File.Exists(HistoryPath)) return "[]";
+        try
+        {
+            var json = File.ReadAllText(HistoryPath);
+            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+            return doc.RootElement.ValueKind switch
+            {
+                JsonValueKind.Array  => doc.RootElement.GetRawText(),
+                JsonValueKind.Object => "[" + doc.RootElement.GetRawText() + "]",
+                _ => "[]",
+            };
+        }
+        catch (Exception ex) when (ex is JsonException or IOException)
+        {
+            return "[]";
         }
     }
 }

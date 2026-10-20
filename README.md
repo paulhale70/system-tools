@@ -1,23 +1,28 @@
 # System-tools
 
-Version **1.3.0** &middot;
+Version **1.4.0** &middot;
 [CHANGELOG](CHANGELOG.md) &middot;
 [LICENSE](LICENSE) (MIT)
 
-Four sibling projects in one repo:
+**System-tools Diagnostics** is one Windows app, `SystemTools.Desktop.exe`,
+built from the first three folders below. The PowerShell collector and
+the web dashboard are compiled into the `.exe`, so it is a single file
+to hand out: Run, Dashboard, Diff, Plugins and Settings in one window.
+The media inventory app is a separate project that shares the repo.
 
 | Folder | What it is |
 | --- | --- |
-| [`diagnostics/`](diagnostics/) | Generic Windows diagnostic toolset. PowerShell scripts that collect system state into a styled HTML report with trend tracking, plain-English fix suggestions, and a comparison tool for two runs. Project-agnostic - works for any project on any Windows machine. |
-| [`desktop/`](desktop/) | WPF / .NET 8 GUI front-end. Wraps `diagnostics/system-diagnostics.ps1` with run controls, history sidebar, in-app diff, trend charts (ScottPlot), plugin browser, scheduled runs, and update checker. Distributable as a self-contained single-file `.exe`. |
-| [`web/`](web/) | Single-file HTML SPA dashboard. Drag-drop your `diagnostics-history.json` into any browser to explore Overview / History / Trends / Recurring tabs. No install, no server, no build - one file, any OS. |
+| [`desktop/`](desktop/) | **The app.** WPF / .NET 8 GUI with run controls, history and report viewer, the dashboard, in-app diff, plugin browser, scheduled runs and update checker. Publishes as one self-contained `.exe`. |
+| [`diagnostics/`](diagnostics/) | The engine. PowerShell scripts that collect system state into a styled HTML report with trend tracking, plain-English fix suggestions, and a comparison tool for two runs. Bundled into the app; also usable on their own (e.g. the emailable `run-diagnostics.bat`). |
+| [`web/`](web/) | The dashboard (Overview / History / Trends / Recurring). One HTML file: it is the app's **Dashboard** tab, and still works standalone in any browser via drag-and-drop. |
 | [`media-inventory/`](media-inventory/) | Media Inventory Scanner. A Python/Tkinter desktop app for cataloging CDs, books, and Blu-rays using a USB barcode scanner. Uses free public APIs for lookups. |
 
 ## When to use which
 
-- **Run** new diagnostics: `desktop/` (GUI) or `diagnostics/run-diagnostics.bat` (one-shot)
-- **View** past runs across machines, share findings: `web/index.html`
-- **Compare** two runs on the same machine: `desktop/` Diff tab or `diagnostics/diff-diagnostics.ps1`
+- **Run, view and compare** diagnostics: the app (`desktop/`)
+- **One-shot run without installing anything**: `diagnostics/run-diagnostics.bat`
+- **View history on a machine without the app** (or a non-Windows one): open `web/index.html` in a browser
+- **Compare** two runs from a script: `diagnostics/diff-diagnostics.ps1`
 - **Bootstrap** a fresh Windows install for the inventory app: `media-inventory/setup.ps1`
 - **Help non-technical family**: email them `diagnostics/run-diagnostics.bat`
 

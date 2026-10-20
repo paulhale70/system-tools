@@ -4,7 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>System-tools Diagnostics Dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<!-- Pinned to the copies in vendor/. The desktop app serves those offline
+     in place of these URLs, so keep the versions in step. -->
+<script src="https://cdn.tailwindcss.com/3.4.16"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
@@ -17,17 +19,19 @@
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
 </style>
 </head>
-<body class="bg-white text-gray-900" x-cloak>
+<body class="bg-white text-gray-900">
 
-<div x-data="dashboard()" x-init="init()" class="min-h-screen flex flex-col">
+<!-- x-cloak must sit on the Alpine root: Alpine only removes it from elements
+     inside a component, so on <body> it kept the whole page hidden. -->
+<div x-data="dashboard()" x-init="init()" x-cloak class="min-h-screen flex flex-col">
 
   <!-- ======== Header ======== -->
-  <header class="border-b border-gray-200 px-8 py-4 flex items-center justify-between bg-white">
+  <header x-show="!embedded" class="border-b border-gray-200 px-8 py-4 flex items-center justify-between bg-white">
     <div>
       <div class="text-[11px] font-semibold uppercase text-indigo-600 tracking-[0.08em]">System-tools</div>
       <div class="text-xl font-semibold leading-tight">Diagnostics Dashboard</div>
     </div>
-    <div class="flex items-center gap-3" x-show="runs.length > 0">
+    <div class="flex items-center gap-3" x-show="runs.length > 0 && !embedded">
       <span class="text-xs text-gray-500" x-text="loadedSource"></span>
       <button @click="clearData"
               class="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5 rounded-md border border-gray-200 hover:bg-gray-50">
@@ -43,8 +47,16 @@
   <!-- ======== Body ======== -->
   <div class="flex-1 flex bg-gray-50">
 
-    <!-- Empty state -->
-    <div x-show="runs.length === 0" class="flex-1 flex items-center justify-center p-12">
+    <!-- Empty state (inside the desktop app) -->
+    <div x-show="runs.length === 0 && embedded" class="flex-1 flex items-center justify-center p-12">
+      <div class="text-center max-w-md">
+        <div class="text-lg font-semibold">No runs yet</div>
+        <p class="text-gray-600 mt-2">Run diagnostics from the <b>Run</b> tab. Results show up here automatically.</p>
+      </div>
+    </div>
+
+    <!-- Empty state (standalone in a browser) -->
+    <div x-show="runs.length === 0 && !embedded" class="flex-1 flex items-center justify-center p-12">
       <div @drop.prevent="handleDrop($event)"
            @dragenter.prevent="$el.classList.add('drop-active')"
            @dragover.prevent
@@ -312,6 +324,7 @@ function dashboard() {
     filter: '',
     filterProject: '',
     loadedSource: '',
+    embedded: false,
     _chart: null,
     tabs: [
       { id: 'overview',  label: 'Overview'  },
@@ -321,13 +334,33 @@ function dashboard() {
     ],
 
     init() {
+      this.$watch('activeTab', (v) => { if (v === 'trends') this.$nextTick(() => this.renderTrendChart()); });
+
+      // Inside the desktop app (WebView2) the host pushes the history in;
+      // no file picking and no localStorage cache.
+      const host = window.chrome?.webview;
+      if (host) {
+        this.embedded = true;
+        host.addEventListener('message', (e) => this.loadFromHost(e.data));
+        host.postMessage({ type: 'ready' });
+        return;
+      }
+
       const cached = localStorage.getItem('diag-history');
       const source = localStorage.getItem('diag-history-source');
       if (cached) {
         try { this.runs = JSON.parse(cached); this.loadedSource = source || 'cached'; }
         catch {}
       }
-      this.$watch('activeTab', (v) => { if (v === 'trends') this.$nextTick(() => this.renderTrendChart()); });
+    },
+
+    loadFromHost(msg) {
+      if (msg?.type !== 'history' || !Array.isArray(msg.runs)) return;
+      const keep = this.selectedRun && msg.runs.find(r => r.ts === this.selectedRun.ts && r.host === this.selectedRun.host);
+      this.runs = msg.runs;
+      this.loadedSource = msg.source || '';
+      this.selectedRun = keep || null;
+      if (this.activeTab === 'trends') this.$nextTick(() => this.renderTrendChart());
     },
 
     handleFile(e)  { const f = e.target.files?.[0];          if (f) this.readFile(f); },
@@ -337,7 +370,9 @@ function dashboard() {
       const reader = new FileReader();
       reader.onload = (ev) => {
         try {
-          const parsed = JSON.parse(ev.target.result);
+          let parsed = JSON.parse(ev.target.result);
+          // Older collectors wrote a single object after the very first run.
+          if (parsed && !Array.isArray(parsed) && typeof parsed === 'object' && parsed.ts) parsed = [parsed];
           if (!Array.isArray(parsed)) throw new Error('Expected a JSON array of run entries.');
           this.runs = parsed;
           this.loadedSource = f.name;

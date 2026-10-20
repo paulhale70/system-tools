@@ -24,12 +24,14 @@ public sealed class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
+        // Falls back to unpacking the scripts bundled in the .exe, so this
+        // only fails on an I/O problem in %LOCALAPPDATA%.
         try { _runner = new DiagnosticsRunner(); }
-        catch (FileNotFoundException ex) { _statusMessage = ex.Message; _canRun = false; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { _statusMessage = "Diagnostics scripts unavailable: " + ex.Message; _canRun = false; }
 
         var scriptPath = _runner?.ScriptPath;
         Diff     = new DiffViewModel(scriptPath);
-        Trends   = new TrendsViewModel();
         Plugins  = new PluginsViewModel(scriptPath);
         Settings = new SettingsViewModel(scriptPath);
 
@@ -42,12 +44,16 @@ public sealed class MainViewModel : ViewModelBase
 
     // --- Sub-view-models ----------------------------------------------------
     public DiffViewModel     Diff     { get; }
-    public TrendsViewModel   Trends   { get; }
     public PluginsViewModel  Plugins  { get; }
     public SettingsViewModel Settings { get; }
 
     // --- Run state ----------------------------------------------------------
     public ObservableCollection<RunHistoryEntry> History { get; } = new();
+
+    /// <summary>Raised after History is re-read; the Dashboard re-sends it to the page.</summary>
+    public event EventHandler? HistoryReloaded;
+    public string HistoryPath => _history.HistoryPath;
+    public string ReadHistoryJson() => _history.ReadJsonArray();
 
     public RunHistoryEntry? SelectedRun
     {
@@ -85,19 +91,18 @@ public sealed class MainViewModel : ViewModelBase
         {
             if (!Set(ref _selectedTab, value)) return;
             OnPropertyChanged(nameof(IsRunTab));
+            OnPropertyChanged(nameof(IsDashboardTab));
             OnPropertyChanged(nameof(IsDiffTab));
-            OnPropertyChanged(nameof(IsTrendsTab));
             OnPropertyChanged(nameof(IsPluginsTab));
             OnPropertyChanged(nameof(IsSettingsTab));
 
             // Re-populate the dependent view-models when their tab opens.
-            if (value == NavTab.Diff)   Diff.SetRuns(History);
-            if (value == NavTab.Trends) Trends.Load(History);
+            if (value == NavTab.Diff) Diff.SetRuns(History);
         }
     }
-    public bool IsRunTab      => _selectedTab == NavTab.Run;
-    public bool IsDiffTab     => _selectedTab == NavTab.Diff;
-    public bool IsTrendsTab   => _selectedTab == NavTab.Trends;
+    public bool IsRunTab       => _selectedTab == NavTab.Run;
+    public bool IsDashboardTab => _selectedTab == NavTab.Dashboard;
+    public bool IsDiffTab      => _selectedTab == NavTab.Diff;
     public bool IsPluginsTab  => _selectedTab == NavTab.Plugins;
     public bool IsSettingsTab => _selectedTab == NavTab.Settings;
 
@@ -139,10 +144,11 @@ public sealed class MainViewModel : ViewModelBase
         var entries = _history.Load().OrderByDescending(x => x.Timestamp).ToList();
         History.Clear();
         foreach (var e in entries) History.Add(e);
+        HistoryReloaded?.Invoke(this, EventArgs.Empty);
     }
 }
 
-public enum NavTab { Run, Diff, Trends, Plugins, Settings }
+public enum NavTab { Run, Dashboard, Diff, Plugins, Settings }
 
 /// <summary>True -> Collapsed, False -> Visible.</summary>
 public sealed class InvertedBoolToVisibilityConverter : IValueConverter

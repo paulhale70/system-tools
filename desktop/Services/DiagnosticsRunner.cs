@@ -28,25 +28,21 @@ public sealed class DiagnosticsRunner
     /// <summary>
     /// Search order:
     ///   1. Caller override
-    ///   2. ./diagnostics/system-diagnostics.ps1 alongside the .exe
-    ///   3. ../diagnostics/system-diagnostics.ps1 (dev layout: bin/Debug -> repo root)
-    ///   4. %USERPROFILE%\bin\system-diagnostics.ps1 (installed via install.ps1)
+    ///   2. diagnostics\system-diagnostics.ps1 next to the .exe or in a parent
+    ///      folder (a hand-edited distribution, or the repo when running from
+    ///      desktop\bin\...)
+    ///   3. The copy bundled inside the .exe, extracted to
+    ///      %LOCALAPPDATA%\SystemTools\diagnostics (always available)
     /// </summary>
     private static string ResolveScriptPath()
     {
-        var exeDir = AppContext.BaseDirectory;
-        string[] candidates =
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (int i = 0; dir is not null && i < 7; i++, dir = dir.Parent)
         {
-            Path.Combine(exeDir, "diagnostics", "system-diagnostics.ps1"),
-            Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "diagnostics", "system-diagnostics.ps1")),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                         "bin", "system-diagnostics.ps1"),
-        };
-        foreach (var c in candidates)
+            var c = Path.Combine(dir.FullName, "diagnostics", "system-diagnostics.ps1");
             if (File.Exists(c)) return c;
-
-        throw new FileNotFoundException(
-            "system-diagnostics.ps1 not found. Expected next to the .exe in 'diagnostics\\' or in %USERPROFILE%\\bin\\.");
+        }
+        return BundledAssets.ExtractDiagnostics();
     }
 
     /// <summary>
