@@ -4,6 +4,58 @@ All notable changes to this repository will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - Unreleased
+
+One tool instead of three: `desktop/`, `diagnostics/` and `web/` now
+ship together as a single `SystemTools.Desktop.exe`.
+
+### desktop/
+
+- **Scripts bundled into the .exe.** The diagnostics scripts and the
+  sample plugin are embedded resources, unpacked to
+  `%LOCALAPPDATA%\SystemTools\diagnostics\` on start (core scripts are
+  refreshed when they differ; the plugins folder is only seeded once).
+  No more copying a `diagnostics\` folder next to the `.exe`.
+- Script lookup now walks up from the `.exe` for a `diagnostics\`
+  folder, then falls back to the bundled copy. This also fixes the dev
+  layout path, which pointed one folder short once the build gained a
+  `win-x64` RuntimeIdentifier. `%USERPROFILE%\bin` is no longer searched.
+- **New Dashboard tab** hosting `web/index.html` in WebView2. The page
+  and its libraries are served from embedded resources (CDN requests
+  are answered from vendored copies), so it works offline, and the
+  history is pushed in automatically and refreshed after every run.
+- **Trends tab removed** (the Dashboard has Trends and Recurring), and
+  with it the ScottPlot dependency; the published `.exe` drops from
+  ~77 MB to ~72 MB.
+- **Fix: the app crashed on startup** (`Cannot find resource named
+  'InvertedBoolToVis'`). The converters lived in `MainWindow.Resources`,
+  which views' StaticResource lookups cannot see; they moved to
+  `App.xaml`.
+- Sidebar tabs switch on `Checked` instead of `Click`, so keyboard and
+  accessibility tools can change tabs too.
+- `HistoryReader` accepts a history file holding a single object (see
+  the diagnostics fix below).
+- Assembly version bumped to 1.4.0.
+
+### web/
+
+- **Fix: the page never displayed.** `x-cloak` sat on `<body>`, outside
+  the Alpine component, so it was never removed and the body stayed
+  `display:none`. It now sits on the component root.
+- Embedded mode: inside WebView2 the page hides its header and file
+  picker, asks the host for data, and renders what it sends.
+- Library copies in `web/vendor/` (Tailwind 3.4.16, Alpine 3.13.5,
+  Chart.js 4.4.1); the Tailwind URL is pinned to match.
+- A history file holding a single object is accepted.
+
+### diagnostics/
+
+- **Fix:** after the very first run, `diagnostics-history.json` was
+  written as a bare object instead of an array (`ConvertTo-Json`
+  unrolls a one-item pipeline), which the GUI and dashboard rejected.
+  It is now always an array.
+- `TOOL_VERSION` 1.4.0.
+
 ## [1.3.0] - 2026-06-15
 
 ### diagnostics/

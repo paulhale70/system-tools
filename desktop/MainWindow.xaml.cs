@@ -9,9 +9,9 @@ public partial class MainWindow : Window
 
     private MainViewModel? Vm => DataContext as MainViewModel;
 
-    private void OnNavRun(object sender, RoutedEventArgs e)      { if (Vm is not null) Vm.SelectedTab = NavTab.Run; }
-    private void OnNavDiff(object sender, RoutedEventArgs e)     { if (Vm is not null) Vm.SelectedTab = NavTab.Diff; }
-    private void OnNavTrends(object sender, RoutedEventArgs e)   { if (Vm is not null) Vm.SelectedTab = NavTab.Trends; }
+    private void OnNavRun(object sender, RoutedEventArgs e)       { if (Vm is not null) Vm.SelectedTab = NavTab.Run; }
+    private void OnNavDashboard(object sender, RoutedEventArgs e) { if (Vm is not null) Vm.SelectedTab = NavTab.Dashboard; }
+    private void OnNavDiff(object sender, RoutedEventArgs e)      { if (Vm is not null) Vm.SelectedTab = NavTab.Diff; }
     private void OnNavPlugins(object sender, RoutedEventArgs e)  { if (Vm is not null) Vm.SelectedTab = NavTab.Plugins; }
     private void OnNavSettings(object sender, RoutedEventArgs e) { if (Vm is not null) Vm.SelectedTab = NavTab.Settings; }
 }

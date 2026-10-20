@@ -1,9 +1,17 @@
 <Application x:Class="SystemTools.Desktop.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:SystemTools.Desktop.ViewModels"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
         <ResourceDictionary>
+
+            <!-- Converters. These live here, not in MainWindow.Resources: each
+                 view's XAML loads before the view joins the window, so a
+                 StaticResource in a view can only see application resources. -->
+            <BooleanToVisibilityConverter x:Key="BoolToVis" />
+            <vm:InvertedBoolToVisibilityConverter x:Key="InvertedBoolToVis" />
+            <vm:EnumEqualsConverter x:Key="EnumEquals" />
 
             <!-- Palette -->
             <Color x:Key="BgColor">#FFFFFFFF</Color>

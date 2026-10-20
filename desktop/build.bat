@@ -62,8 +62,7 @@ exit /b 1
 echo.
 echo Built: %EXE%
 echo.
-echo Before distributing, copy ..\diagnostics\system-diagnostics.ps1,
-echo diff-diagnostics.ps1, trends-diagnostics.ps1, and the plugins
-echo subfolder next to the .exe. The GUI looks for them in a
-echo 'diagnostics' subdirectory.
+echo The diagnostics scripts and the dashboard are built into the .exe,
+echo so it can be distributed on its own. They unpack to
+echo %%LOCALAPPDATA%%\SystemTools\diagnostics on first run.
 pause

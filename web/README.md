@@ -1,80 +1,75 @@
-# System-tools Web Dashboard (v3-web branch)
+# System-tools Web Dashboard
 
-A standalone, interactive web dashboard for browsing your diagnostics
-history. **One file, no build step, no server, no install.** Open it
-in any modern browser, drag-and-drop your `diagnostics-history.json`,
-and explore.
+An interactive dashboard for browsing your diagnostics history. It is
+**one HTML file** used in two ways:
 
-This sits alongside the WPF desktop (v1) and the PowerShell scripts.
-It does *not* run new diagnostics — it visualizes the JSON history
-that `system-diagnostics.ps1` already maintains at
+- **Inside the desktop app** - the **Dashboard** tab of
+  `SystemTools.Desktop.exe`. The app serves this file from inside the
+  `.exe` and pushes the history in automatically, so there is nothing
+  to load and it works offline.
+- **Standalone in a browser** - open `web/index.html` in any modern
+  browser and drag-and-drop your `diagnostics-history.json`. Useful on
+  a non-Windows machine or for sharing findings.
+
+It does *not* run new diagnostics. It visualizes the JSON history that
+`system-diagnostics.ps1` maintains at
 `%USERPROFILE%\diagnostics-history.json`.
 
-## How to use
+## Tabs
 
-1. Open `web/index.html` in any modern browser (Edge, Chrome, Firefox).
-2. Drag-and-drop your `diagnostics-history.json` onto the page,
-   or click "Choose file".
-3. Tabs:
-   - **Overview** — totals, hosts, projects, latest run.
-   - **History** — searchable / filterable list of every run; click
-     one to see its full verdict list.
-   - **Trends** — OK / WARN / FAIL line chart over the last 20 runs.
-   - **Recurring** — verdicts that appear most often across all runs.
+- **Overview** - totals, hosts, projects, latest run.
+- **History** - searchable / filterable list of every run; click one
+  to see its full verdict list.
+- **Trends** - OK / WARN / FAIL line chart over the last 20 runs.
+- **Recurring** - verdicts that appear most often across all runs.
 
-The loaded JSON is cached in browser `localStorage` so a refresh
-keeps your data.
+## Standalone use
 
-## Why a single static file?
+1. Open `web/index.html` in Edge, Chrome or Firefox.
+2. Drag-and-drop `diagnostics-history.json` onto the page, or click
+   "Choose file".
 
-- **Zero install** for the audience: open one HTML in a browser.
-- **Zero server**: no Node, no Python, no Docker.
-- **Easy to share**: email the `.html`, paste into a OneDrive, drop in
-  a USB stick. Anyone with a browser can use it.
-- **Easy to read**: every line of behavior is in one file, no build
-  pipeline. View source to audit.
+The loaded JSON is cached in browser `localStorage` so a refresh keeps
+your data. Standalone mode needs a network connection, because the
+libraries load from CDNs.
 
-The trade-off vs. the WPF desktop:
+## Embedded mode (desktop app)
 
-| | WPF desktop (`desktop/`) | Web dashboard (`web/`) |
-| --- | --- | --- |
-| Runs new diagnostics | Yes | No - viewer only |
-| Plugin management | Yes | No |
-| Scheduled runs | Yes | No |
-| Update checker | Yes | No |
-| Install required | One 75 MB `.exe` | Just a browser |
-| Cross-platform | Windows only | Anywhere |
+When the page finds `window.chrome.webview` (WebView2), it:
 
-Use the desktop when you want to *do* things. Use the web dashboard
-when you want to *understand* the history at a glance, share findings,
-or look at a report from a non-Windows machine.
+- hides its own header and the file-picking UI,
+- posts `{ type: 'ready' }` to the host,
+- renders whatever the host sends as
+  `{ type: 'history', source, runs: [...] }` (re-sent after every run
+  and whenever the tab is opened).
+
+See `desktop/Views/DashboardView.xaml.cs` for the host side.
 
 ## Tech stack
 
-- **Tailwind CSS** via CDN for styling
-- **Alpine.js** for reactivity (a tiny declarative framework, no build)
-- **Chart.js** for the trends line chart
+- **Tailwind CSS** 3.4.16 (Play CDN build) for styling
+- **Alpine.js** 3.13.5 for reactivity (no build step)
+- **Chart.js** 4.4.1 for the trends chart
 
-All three load from `jsDelivr` CDN. With a network connection the page
-is self-contained; without one it falls back gracefully (Alpine and
-Chart.js won't initialize, but you can still open it later).
+`index.html` references these at pinned CDN URLs. Identical copies live
+in `vendor/`; the desktop app compiles them in and answers those CDN
+requests from them, which is what makes the Dashboard tab work offline.
+**When bumping a library, change the URL in `index.html`, the file in
+`vendor/` and the map in `DashboardView.xaml.cs` together.**
+
+| File | Source |
+| --- | --- |
+| `vendor/tailwindcss-3.4.16.js` | https://cdn.tailwindcss.com/3.4.16 |
+| `vendor/alpinejs-3.13.5.min.js` | https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js |
+| `vendor/chartjs-4.4.1.umd.min.js` | https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js |
+
+All three are MIT licensed.
 
 ## Roadmap
 
-This is v3 v0.1. Possible follow-ups (no order assumed):
+Possible follow-ups (no order assumed):
 
-- Inline iframe of the selected run's `00-summary.html` (requires
-  drag-dropping the report folder too).
+- Inline view of the selected run's `00-summary.html` (in the app this
+  is already on the Run tab).
 - Multi-file load: drop several JSON files to compare hosts.
 - Export the dashboard view as PDF / image for sharing.
-- Optional small-Python local server (`web/server.py`) to run
-  diagnostics on demand from the browser. Adds a runtime requirement.
-- PWA install so the file becomes a real desktop "app".
-- Embedded "share to GitHub gist" button.
-
-## Branch policy
-
-Lives on the `v3-web` branch. To merge into `main`, the WPF desktop
-and the web dashboard both ship side by side - they are non-overlapping
-deliverables. Suggested approach: open a PR from `v3-web` -> `main`
-once the dashboard has a feature set worth releasing as part of v1.1.

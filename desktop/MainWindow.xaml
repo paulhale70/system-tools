@@ -8,10 +8,6 @@
         WindowStartupLocation="CenterScreen">
 
     <Window.Resources>
-        <BooleanToVisibilityConverter x:Key="BoolToVis" />
-        <vm:InvertedBoolToVisibilityConverter x:Key="InvertedBoolToVis" />
-        <vm:EnumEqualsConverter x:Key="EnumEquals" />
-
         <Style x:Key="NavButton" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="Background" Value="Transparent" />
@@ -80,28 +76,28 @@
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
                 <StackPanel>
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
-                                 Content="Run" Click="OnNavRun"
+                                 Content="Run" Checked="OnNavRun"
                                  IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Run}" />
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
-                                 Content="Diff" Click="OnNavDiff"
+                                 Content="Dashboard" Checked="OnNavDashboard"
+                                 IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Dashboard}" />
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 Content="Diff" Checked="OnNavDiff"
                                  IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Diff}" />
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
-                                 Content="Trends" Click="OnNavTrends"
-                                 IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Trends}" />
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
-                                 Content="Plugins" Click="OnNavPlugins"
+                                 Content="Plugins" Checked="OnNavPlugins"
                                  IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Plugins}" />
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
-                                 Content="Settings" Click="OnNavSettings"
+                                 Content="Settings" Checked="OnNavSettings"
                                  IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Settings}" />
                 </StackPanel>
             </Border>
 
             <!-- Content swap based on selected tab -->
             <Grid Grid.Column="1">
-                <v:RunView      Visibility="{Binding IsRunTab,      Converter={StaticResource BoolToVis}}" />
-                <v:DiffView     Visibility="{Binding IsDiffTab,     Converter={StaticResource BoolToVis}}" />
-                <v:TrendsView   Visibility="{Binding IsTrendsTab,   Converter={StaticResource BoolToVis}}" />
+                <v:RunView       Visibility="{Binding IsRunTab,       Converter={StaticResource BoolToVis}}" />
+                <v:DashboardView Visibility="{Binding IsDashboardTab, Converter={StaticResource BoolToVis}}" />
+                <v:DiffView      Visibility="{Binding IsDiffTab,      Converter={StaticResource BoolToVis}}" />
                 <v:PluginsView  Visibility="{Binding IsPluginsTab,  Converter={StaticResource BoolToVis}}" />
                 <v:SettingsView Visibility="{Binding IsSettingsTab, Converter={StaticResource BoolToVis}}" />
             </Grid>
