@@ -4,7 +4,7 @@ All notable changes to this repository will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/).
 
-## [1.4.1] - Unreleased
+## [1.4.1] - 2026-10-20
 
 Crash-dump analysis works for the first time. Tested against real
 LiveKernelReports dumps on a Windows 11 machine with the Store WinDbg.
