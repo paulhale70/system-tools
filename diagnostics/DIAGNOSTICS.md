@@ -93,9 +93,25 @@ made a difference:
 .\diff-diagnostics.ps1 -Old "report-monday.zip" -New "report-tuesday.zip"
 ```
 
-**Crash-dump auto-analysis.** If Windows Debugging Tools (`cdb.exe`) is
-installed, the script runs `!analyze -v` against recent minidumps and
-saves the bug-check root cause as text.
+**Crash-dump auto-analysis.** If a Windows debugger (`cdb.exe`) is
+installed, the script runs `!analyze -v` against dumps from the last 30
+days and explains the bug-check code in plain English:
+
+- `C:\Windows\Minidump` - blue-screen crashes (reported as FAIL)
+- `C:\Windows\LiveKernelReports` - hangs Windows recovered from, such as
+  graphics timeouts or a black screen fixed by holding the power button
+  (reported as WARN, marked "live dump"; files over 256 MB are skipped)
+- `C:\Windows\MEMORY.DMP` with `-AnalyzeKernelDump` (slow)
+
+Run elevated so the dump folders are readable. Any of these debuggers
+works: the Windows SDK "Debugging Tools for Windows", or WinDbg from the
+Microsoft Store (`winget install Microsoft.WinDbg`). Windows will not let
+scripts start the Store version from its install folder, so the first
+analysis copies its debugger (~135 MB) to
+`%LOCALAPPDATA%\SystemTools\windbg\` and runs it from there. Symbols come
+from Microsoft's public symbol server and are cached in
+`%TEMP%\SymbolCache` (`-DumpSymbolCache` to change); the first analysis
+downloads a few hundred MB.
 
 **PII redaction.** Pass `-Sanitize` to redact username, host name,
 USERPROFILE path, MAC addresses, and private IPs from every text file
