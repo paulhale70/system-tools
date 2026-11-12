@@ -29,7 +29,7 @@ param(
     [string]$Project,
     [string]$ComputerName,
     [int]$Top = 15,
-    [string]$HistoryPath = (Join-Path $env:USERPROFILE 'diagnostics-history.json')
+    [string]$HistoryPath = $(if ($env:SYSTEMTOOLS_HISTORY_PATH) { $env:SYSTEMTOOLS_HISTORY_PATH } else { Join-Path $env:USERPROFILE 'diagnostics-history.json' })
 )
 
 $ErrorActionPreference = 'Stop'
