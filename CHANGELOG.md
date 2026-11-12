@@ -6,6 +6,32 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### diagnostics/
+
+- **New: `analyze-dump.ps1`** analyzes any crash dump and explains it
+  in plain English: blue screens, recovered hangs (LiveKernelReports),
+  app crashes (`%LOCALAPPDATA%\CrashDumps`, WER `.mdmp` / `.hdmp`), or
+  a `.dmp` someone sends you. It writes an HTML report with the
+  verdict, the advice, the module at fault and who makes it (Windows,
+  Intel, ...), the top of the stack, and the full debugger output.
+  `-List` shows the dumps on this PC; with no arguments it lets you
+  pick one.
+- The collector now analyzes app crash dumps too (up to 3 from the
+  last 30 days), not only blue screens and live dumps, and its summary
+  lines say what crashed and where. .NET crashes name the exception
+  type.
+- **Fix: the Store WinDbg wasn't found without elevation.** The
+  `WindowsApps` folder can't be listed by a normal user, so dump
+  analysis said "debugger not installed". It now asks Windows for the
+  package's install path, and reuses an earlier copy as a fallback.
+
+### desktop/
+
+- **New Crash dumps tab**: the dumps on this PC from the last 90 days,
+  Analyze (or double-click), Browse for any `.dmp`, Cancel, and the
+  report shown in the tab. When the app isn't elevated it says which
+  dumps may be hidden and offers to restart as administrator.
+
 ## [1.5.0] - 2026-11-11
 
 Reports and trend history can live in a synced folder, and a code

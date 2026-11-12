@@ -12,6 +12,7 @@ public partial class MainWindow : Window
     private void OnNavRun(object sender, RoutedEventArgs e)       { if (Vm is not null) Vm.SelectedTab = NavTab.Run; }
     private void OnNavDashboard(object sender, RoutedEventArgs e) { if (Vm is not null) Vm.SelectedTab = NavTab.Dashboard; }
     private void OnNavDiff(object sender, RoutedEventArgs e)      { if (Vm is not null) Vm.SelectedTab = NavTab.Diff; }
+    private void OnNavDumps(object sender, RoutedEventArgs e)     { if (Vm is not null) Vm.SelectedTab = NavTab.Dumps; }
     private void OnNavPlugins(object sender, RoutedEventArgs e)  { if (Vm is not null) Vm.SelectedTab = NavTab.Plugins; }
     private void OnNavSettings(object sender, RoutedEventArgs e) { if (Vm is not null) Vm.SelectedTab = NavTab.Settings; }
 }

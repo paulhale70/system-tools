@@ -32,6 +32,7 @@ public sealed class MainViewModel : ViewModelBase
 
         var scriptPath = _runner?.ScriptPath;
         Diff     = new DiffViewModel(scriptPath);
+        Dumps    = new DumpsViewModel(scriptPath, msg => StatusMessage = msg);
         Plugins  = new PluginsViewModel(scriptPath);
         Settings = new SettingsViewModel(scriptPath);
 
@@ -44,6 +45,7 @@ public sealed class MainViewModel : ViewModelBase
 
     // --- Sub-view-models ----------------------------------------------------
     public DiffViewModel     Diff     { get; }
+    public DumpsViewModel    Dumps    { get; }
     public PluginsViewModel  Plugins  { get; }
     public SettingsViewModel Settings { get; }
 
@@ -93,6 +95,7 @@ public sealed class MainViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsRunTab));
             OnPropertyChanged(nameof(IsDashboardTab));
             OnPropertyChanged(nameof(IsDiffTab));
+            OnPropertyChanged(nameof(IsDumpsTab));
             OnPropertyChanged(nameof(IsPluginsTab));
             OnPropertyChanged(nameof(IsSettingsTab));
 
@@ -103,6 +106,7 @@ public sealed class MainViewModel : ViewModelBase
     public bool IsRunTab       => _selectedTab == NavTab.Run;
     public bool IsDashboardTab => _selectedTab == NavTab.Dashboard;
     public bool IsDiffTab      => _selectedTab == NavTab.Diff;
+    public bool IsDumpsTab     => _selectedTab == NavTab.Dumps;
     public bool IsPluginsTab  => _selectedTab == NavTab.Plugins;
     public bool IsSettingsTab => _selectedTab == NavTab.Settings;
 
@@ -148,7 +152,7 @@ public sealed class MainViewModel : ViewModelBase
     }
 }
 
-public enum NavTab { Run, Dashboard, Diff, Plugins, Settings }
+public enum NavTab { Run, Dashboard, Diff, Dumps, Plugins, Settings }
 
 /// <summary>True -> Collapsed, False -> Visible.</summary>
 public sealed class InvertedBoolToVisibilityConverter : IValueConverter
