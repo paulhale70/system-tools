@@ -174,3 +174,16 @@ Install Pillow: `pip install Pillow`
 
 **Scanner input goes to the wrong field**
 Press `Escape` to clear and refocus the scan field before scanning.
+
+**Anything else: run the diagnostics**
+`diagnosticspp-diagnostics.ps1` runs the full Windows diagnostics
+from the repo's [`diagnostics/`](../diagnostics/) folder, then adds
+database health, the app log and a live lookup test. It writes a zipped
+report to your Desktop.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\diagnosticspp-diagnostics.ps1
+```
+
+`diagnostics\_dx_db_check.py` and `diagnostics\_dx_lookup_check.py` are
+helpers it calls; you don't run them directly.

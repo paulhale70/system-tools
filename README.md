@@ -34,3 +34,20 @@ The media inventory app is a separate project that shares the repo.
 - Desktop GUI: [`desktop/README.md`](desktop/README.md)
 - Web dashboard: [`web/README.md`](web/README.md)
 - Media Inventory Scanner: [`media-inventory/README.md`](media-inventory/README.md)
+
+## Layout
+
+```
+SystemTools.sln         Visual Studio / dotnet solution (opens desktop/)
+desktop/                WPF app: Views/, ViewModels/, Services/, Models/
+diagnostics/            PowerShell engine + plugins/  (path is fixed: see below)
+web/                    Dashboard: index.html + vendor/ (pinned JS libs)
+media-inventory/        Python app; its diagnostics wrapper is in diagnostics/
+```
+
+`diagnostics/system-diagnostics.ps1` must not move or be renamed:
+copies of `run-diagnostics.bat` already emailed out download it from
+that path on `main`.
+
+Build the app from the root with `dotnet build SystemTools.sln`, or run
+`desktopuild.bat` for the signed single-file release `.exe`.

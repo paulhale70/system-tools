@@ -1,7 +1,7 @@
-"""Diagnostic helper invoked by collect-diagnostics.ps1.
+"""Diagnostic helper invoked by diagnostics/app-diagnostics.ps1.
 
 Runs the full lookup pipeline against a known-good UPC and reports the
-result or traceback. Run from the project root so `import lookup` works.
+result or traceback. Run with media-inventory/ as the working directory so `import lookup` works.
 """
 import json
 import os

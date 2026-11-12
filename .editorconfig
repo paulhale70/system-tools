@@ -1,0 +1,33 @@
+# Records the conventions already in the repo; see also .gitattributes.
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Windows PowerShell 5.1 reads BOM-less scripts as ANSI, so keep the BOM.
+[*.ps1]
+charset = utf-8-bom
+end_of_line = crlf
+
+[*.{bat,cmd}]
+end_of_line = crlf
+
+[*.{py,md}]
+end_of_line = lf
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{csproj,sln,xml,json,yml,yaml}]
+indent_size = 2
+
+[web/vendor/**]
+charset = unset
+indent_style = unset
+indent_size = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
