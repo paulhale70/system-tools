@@ -468,7 +468,11 @@ function Get-RunTrends {
     if (-not (Test-Path $script:HISTORY_PATH)) { return $null }
     try {
         $raw = Get-Content $script:HISTORY_PATH -Raw -ErrorAction Stop
-        $history = @($raw | ConvertFrom-Json)
+        # Assign first: Windows PowerShell 5.1's ConvertFrom-Json emits a JSON
+        # array as ONE object, so @(... | ConvertFrom-Json) wraps the whole
+        # history as a single run. @() on the variable keeps the array as-is.
+        $loaded  = $raw | ConvertFrom-Json
+        $history = @($loaded)
     } catch { return $null }
 
     $relevant = @($history | Where-Object { $_.host -eq $HostName -and $_.project -eq $Project })

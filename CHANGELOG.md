@@ -8,6 +8,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ### diagnostics/
 
+- **Fix: trends never compared runs.** On Windows PowerShell 5.1,
+  `ConvertFrom-Json` emits a JSON array as one object, so
+  `@($raw | ConvertFrom-Json)` turned the whole history file into a
+  single "run". The summary always said "Total recorded runs: 1" with
+  every timestamp jammed into "first", the project/host filters matched
+  everything, and new / resolved / recurring verdicts were never shown.
+  Fixed in `system-diagnostics.ps1` (`Get-RunTrends`) and
+  `trends-diagnostics.ps1`. The history file itself was always written
+  correctly, so past runs show up in trends straight away.
 - Reports can go somewhere other than the Desktop: set the
   `SYSTEMTOOLS_REPORTS_DIR` environment variable (for example to a
   Google Drive folder) and `system-diagnostics.ps1` writes there by
