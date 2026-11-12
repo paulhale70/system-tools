@@ -26,7 +26,9 @@
 .PARAMETER OutputRoot
     Directory where the report folder and zip are written. Default: the
     SYSTEMTOOLS_REPORTS_DIR environment variable when it is set (e.g. a
-    Google Drive or OneDrive folder), otherwise the Desktop.
+    Google Drive or OneDrive folder), otherwise the Desktop. If that
+    folder can't be written (say the Drive isn't mounted yet), the report
+    goes to the Desktop and the summary says so.
 
 .PARAMETER EventLogDays
     Days of Application/System event log entries to collect. Default: 7.
@@ -79,7 +81,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$OutputRoot        = $(if ($env:SYSTEMTOOLS_REPORTS_DIR) { $env:SYSTEMTOOLS_REPORTS_DIR } else { [Environment]::GetFolderPath('Desktop') }),
+    [string]$OutputRoot,
     [int]$EventLogDays         = 7,
     [string]$ProjectName       = 'System',
     [string[]]$Endpoints       = @(),
@@ -98,8 +100,11 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
 $script:TOOL_NAME    = 'System-tools diagnostics'
-$script:TOOL_VERSION = '1.4.1'
-$script:HISTORY_PATH = Join-Path $env:USERPROFILE 'diagnostics-history.json'
+$script:TOOL_VERSION = '1.5.0'
+# SYSTEMTOOLS_HISTORY_PATH moves the trend history, e.g. next to the
+# reports in a synced folder. trends-diagnostics.ps1 and the desktop app
+# read the same variable.
+$script:HISTORY_PATH = if ($env:SYSTEMTOOLS_HISTORY_PATH) { $env:SYSTEMTOOLS_HISTORY_PATH } else { Join-Path $env:USERPROFILE 'diagnostics-history.json' }
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -156,6 +161,10 @@ function Test-Elevated {
 }
 
 function Find-ProjectRoot {
+    # The nearest folder above the script (or the current folder) that has
+    # a .git. $null when there is none: falling back to the script's own
+    # folder made the run-diagnostics.bat flow, which runs the script from
+    # %TEMP%, fingerprint every file in %TEMP%.
     if ($PSScriptRoot) {
         $dir = $PSScriptRoot
     } else {
@@ -164,11 +173,26 @@ function Find-ProjectRoot {
     while ($dir) {
         if (Test-Path (Join-Path $dir '.git')) { return $dir }
         $parent = Split-Path $dir -Parent
-        if ($parent -eq $dir) { break }
+        if (-not $parent -or $parent -eq $dir) { break }
         $dir = $parent
     }
-    if ($PSScriptRoot) { return $PSScriptRoot }
-    return (Get-Location).Path
+    return $null
+}
+
+function Get-DefaultReportsRoot {
+    # SYSTEMTOOLS_REPORTS_DIR (e.g. a Google Drive folder), else the Desktop.
+    # Initialize-Report falls back to the Desktop if this can't be written.
+    if ($env:SYSTEMTOOLS_REPORTS_DIR) { return $env:SYSTEMTOOLS_REPORTS_DIR }
+    return [Environment]::GetFolderPath('Desktop')
+}
+
+function Get-ShortMessage($Message, [int]$Max = 500) {
+    # Collapse whitespace first, then cut to the collapsed length. Cutting
+    # by the original length threw on long multi-line messages (the
+    # interesting ones), which left them blank in the CSVs.
+    $m = ([string]$Message) -replace '\s+', ' '
+    if ($m.Length -gt $Max) { return $m.Substring(0, $Max) }
+    return $m
 }
 
 function Invoke-PythonScript($projectRoot, $scriptPath) {
@@ -212,19 +236,29 @@ function Get-LikelyFixes {
 
 function Invoke-Sanitize {
     param([string]$Dir)
-    # Build replacement map of obvious PII.
-    $replacements = [ordered]@{
-        ([Regex]::Escape($env:COMPUTERNAME))                                                     = '<PC>'
-        ([Regex]::Escape($env:USERNAME))                                                         = '<USER>'
-        ([Regex]::Escape($env:USERPROFILE))                                                      = '<USERPROFILE>'
-        '\b([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}\b'                                              = '<MAC>'
-        '\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'                                                      = '<10.x.x.x>'
-        '\b192\.168\.\d{1,3}\.\d{1,3}\b'                                                         = '<192.168.x.x>'
-        '\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b'                                          = '<172.16-31.x.x>'
+    # Most specific first: USERPROFILE contains USERNAME, so replacing the
+    # name first left the profile rule nothing to match. Names match only
+    # as whole tokens, so a short name like "al" can't turn "Installed"
+    # into "Inst<USER>led".
+    function Get-TokenPattern($s) { '(?<![A-Za-z0-9])' + [Regex]::Escape($s) + '(?![A-Za-z0-9])' }
+    $replacements = [ordered]@{}
+    if ($env:USERPROFILE) {
+        $replacements[[Regex]::Escape($env:USERPROFILE)] = '<USERPROFILE>'
+        # As it appears inside JSON strings.
+        $replacements[[Regex]::Escape($env:USERPROFILE.Replace('\', '\\'))] = '<USERPROFILE>'
     }
-    if ($env:USERDOMAIN) { $replacements[[Regex]::Escape($env:USERDOMAIN)] = '<DOMAIN>' }
+    if ($env:COMPUTERNAME) { $replacements[(Get-TokenPattern $env:COMPUTERNAME)] = '<PC>' }
+    if ($env:USERDOMAIN -and $env:USERDOMAIN -ne $env:COMPUTERNAME) {
+        $replacements[(Get-TokenPattern $env:USERDOMAIN)] = '<DOMAIN>'
+    }
+    if ($env:USERNAME) { $replacements[(Get-TokenPattern $env:USERNAME)] = '<USER>' }
+    $replacements['\b([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}\b']     = '<MAC>'
+    $replacements['\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b']             = '<10.x.x.x>'
+    $replacements['\b192\.168\.\d{1,3}\.\d{1,3}\b']                = '<192.168.x.x>'
+    $replacements['\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b'] = '<172.16-31.x.x>'
 
-    Get-ChildItem -Path $Dir -Recurse -File -Include '*.txt','*.csv','*.log','*.html','*.json' -ErrorAction SilentlyContinue |
+    # *.wer: the copied crash reports carry the same names and paths.
+    Get-ChildItem -Path $Dir -Recurse -File -Include '*.txt','*.csv','*.log','*.html','*.json','*.wer','*.xml' -ErrorAction SilentlyContinue |
         ForEach-Object {
             try {
                 $content = Get-Content $_.FullName -Raw -ErrorAction Stop
@@ -440,21 +474,55 @@ function Save-RunHistory {
         counts    = $counts
         verdicts  = @($Summary)
     }
+    $path = $script:HISTORY_PATH
     $history = @()
-    if (Test-Path $script:HISTORY_PATH) {
-        try {
-            $raw = Get-Content $script:HISTORY_PATH -Raw -ErrorAction Stop
-            $loaded = $raw | ConvertFrom-Json
-            if ($loaded) { $history = @($loaded) }
-        } catch {}
+    if (Test-Path $path) {
+        # A read can fail for a moment while the desktop app or a sync
+        # client has the file open. Retry, and if it still fails leave the
+        # file alone: writing now would replace the whole history with
+        # this one run.
+        $raw = $null
+        for ($try = 1; $try -le 3 -and $null -eq $raw; $try++) {
+            try { $raw = [IO.File]::ReadAllText($path) }
+            catch { if ($try -lt 3) { Start-Sleep -Milliseconds 500 } }
+        }
+        if ($null -eq $raw) {
+            Write-Warning "Couldn't read $path, so this run wasn't added to the trend history."
+            return $entry
+        }
+        if ($raw.Trim()) {
+            try {
+                # Assign first; see Get-RunTrends.
+                $loaded = $raw | ConvertFrom-Json -ErrorAction Stop
+                if ($loaded) { $history = @($loaded) }
+            } catch {
+                $bad = "$path.unreadable-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+                Copy-Item $path $bad -Force -ErrorAction SilentlyContinue
+                Write-Warning "$path isn't valid JSON. Kept a copy as $bad and started a new history."
+            }
+        }
     }
     $history += $entry
     if ($history.Count -gt 100) {
         $history = $history[($history.Count - 100)..($history.Count - 1)]
     }
-    # -InputObject keeps a one-entry history as a JSON array; piping
-    # unrolls it into a bare object, which readers then reject.
-    ConvertTo-Json -InputObject @($history) -Depth 6 | Set-Content -Path $script:HISTORY_PATH -Encoding UTF8
+    # Write a temp file and swap it in, so a run that's cut off mid-write
+    # can't leave half a history behind.
+    $tmp = "$path.tmp"
+    try {
+        $parent = Split-Path $path -Parent
+        if ($parent -and -not (Test-Path $parent)) {
+            $null = New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop
+        }
+        # -InputObject keeps a one-entry history as a JSON array; piping
+        # unrolls it into a bare object, which readers then reject.
+        ConvertTo-Json -InputObject @($history) -Depth 6 |
+            Set-Content -Path $tmp -Encoding UTF8 -ErrorAction Stop
+        Move-Item -Path $tmp -Destination $path -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "Couldn't save the trend history to ${path}: $($_.Exception.Message)"
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
     return $entry
 }
 
@@ -566,12 +634,25 @@ function Format-TrendsText {
 
 function Initialize-Report {
     param(
-        [string]$OutputRoot  = $(if ($env:SYSTEMTOOLS_REPORTS_DIR) { $env:SYSTEMTOOLS_REPORTS_DIR } else { [Environment]::GetFolderPath('Desktop') }),
+        [string]$OutputRoot,
         [string]$ProjectName = 'System'
     )
-    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $dir = Join-Path $OutputRoot "$ProjectName-Diagnostics-$timestamp"
-    $null = New-Item -ItemType Directory -Path $dir -Force
+    if (-not $OutputRoot) { $OutputRoot = Get-DefaultReportsRoot }
+    $name = "$ProjectName-Diagnostics-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    $fallbackNote = $null
+    try {
+        # [IO.Path]::Combine, not Join-Path: Join-Path itself throws when
+        # the drive letter doesn't exist.
+        $dir = [IO.Path]::Combine($OutputRoot, $name)
+        $null = New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop
+    } catch {
+        # E.g. SYSTEMTOOLS_REPORTS_DIR on a Google Drive letter that isn't
+        # mounted yet. A report on the Desktop beats no report at all.
+        $fallbackNote = "Couldn't write to $OutputRoot ($($_.Exception.Message)); report saved to the Desktop instead."
+        Write-Warning $fallbackNote
+        $dir = [IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), $name)
+        $null = New-Item -ItemType Directory -Path $dir -Force
+    }
 
     $script:reportDir  = $dir
     $script:summary    = New-Object System.Collections.ArrayList
@@ -579,6 +660,7 @@ function Initialize-Report {
     Start-Transcript -Path $script:transcript -Append | Out-Null
 
     Write-Banner -ProjectName $ProjectName
+    if ($fallbackNote) { Add-Summary 'WARN' $fallbackNote }
     return $dir
 }
 
@@ -792,6 +874,11 @@ function Invoke-SystemDiagnostics {
     Write-Section '3. Project files'
     Try-Run 'Project inventory' {
         $projectRoot = Find-ProjectRoot
+        if (-not $projectRoot) {
+            'No git checkout found above the script, so the project file inventory was skipped.' |
+                Set-Content (Join-Path $ReportDir '03-project-files.txt')
+            return
+        }
 
         $files = Get-ChildItem -Path $projectRoot -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -notmatch '\\\.git\\' -and $_.Length -lt 50MB }
@@ -848,7 +935,7 @@ function Invoke-SystemDiagnostics {
             if ($events) {
                 $events |
                     Select-Object TimeCreated, LevelDisplayName, ProviderName, Id,
-                        @{n='Message';e={ ($_.Message -replace '\s+',' ').Substring(0, [Math]::Min(500, $_.Message.Length)) }} |
+                        @{n='Message';e={ Get-ShortMessage $_.Message }} |
                     Sort-Object TimeCreated -Descending |
                     ConvertTo-Csv -NoTypeInformation |
                     Set-Content (Join-Path $ReportDir "05-events-$log.csv")
@@ -865,7 +952,7 @@ function Invoke-SystemDiagnostics {
             Id       = 41, 1001, 6008, 1003
         } -ErrorAction SilentlyContinue | Where-Object { $_.TimeCreated -ge $since } |
             Select-Object TimeCreated, Id, ProviderName, LevelDisplayName,
-                @{n='Message';e={ ($_.Message -replace '\s+',' ').Substring(0, [Math]::Min(500, $_.Message.Length)) }}
+                @{n='Message';e={ Get-ShortMessage $_.Message }}
         if ($bugchecks) {
             $bugchecks | Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '05-bugchecks.csv')
             Add-Summary 'WARN' ("$($bugchecks.Count) bug-check/power-loss events in the last $EventLogDays days.")
@@ -881,10 +968,26 @@ function Invoke-SystemDiagnostics {
             ProviderName = 'Application Error','Windows Error Reporting','Application Hang','.NET Runtime'
         } -ErrorAction SilentlyContinue | Where-Object { $_.TimeCreated -ge $since } |
             Select-Object TimeCreated, Id, ProviderName, LevelDisplayName,
-                @{n='Message';e={ ($_.Message -replace '\s+',' ').Substring(0, [Math]::Min(500, $_.Message.Length)) }}
+                @{n='Message';e={ Get-ShortMessage $_.Message }}
         if ($appcrash) {
             $appcrash | Export-Csv -NoTypeInformation -Path (Join-Path $ReportDir '05-app-crashes.csv')
-            Add-Summary 'WARN' ("$($appcrash.Count) app crash/hang events in the last $EventLogDays days.")
+            # The CSV keeps everything, but only these are crashes or hangs.
+            # Most WER 1001 events are Store/update install failures (the
+            # rest duplicate the crashes below), and .NET 1000/1022 are log
+            # noise. Counting them all reported 192 "crashes" for 8 real ones.
+            $real = @($appcrash | Where-Object {
+                ($_.ProviderName -eq 'Application Error' -and $_.Id -eq 1000) -or
+                ($_.ProviderName -eq 'Application Hang'  -and $_.Id -eq 1002) -or
+                ($_.ProviderName -eq '.NET Runtime'      -and $_.Id -eq 1026)
+            })
+            if ($real.Count -gt 0) {
+                $apps = @($real | ForEach-Object {
+                    if ($_.Message -match '(?:Faulting application name|Application|The program):?\s+([^\s,]+)') { $Matches[1] }
+                } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 |
+                    ForEach-Object { "$($_.Name) x$($_.Count)" })
+                $top = if ($apps) { ' Top: ' + ($apps -join ', ') + '.' } else { '' }
+                Add-Summary 'WARN' ("$($real.Count) app crash/hang events in the last $EventLogDays days.$top")
+            }
         } else {
             "No app crash/hang events in the last $EventLogDays days." |
                 Set-Content (Join-Path $ReportDir '05-app-crashes.csv')

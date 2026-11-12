@@ -46,7 +46,9 @@ else on your own machine (a Google Drive or OneDrive folder, say), set
 ```
 
 New PowerShell windows, the desktop app (after a restart) and scheduled
-runs pick it up. `-OutputRoot` still overrides it for a single run.
+runs pick it up. `-OutputRoot` still overrides it for a single run. If
+the folder can't be written when a run starts (the Drive isn't mounted
+yet, say), that report goes to the Desktop and its summary says so.
 Leave it unset on family machines: `run-diagnostics.bat` and
 INSTRUCTIONS-FOR-USERS.md expect the zip on the Desktop.
 
@@ -133,7 +135,9 @@ downloads a few hundred MB.
 
 **PII redaction.** Pass `-Sanitize` to redact username, host name,
 USERPROFILE path, MAC addresses, and private IPs from every text file
-in the report before zipping. Use when sharing publicly.
+in the report, including the copied `Report.wer` crash reports, before
+zipping. Names are replaced only as whole words. Use when sharing
+publicly.
 
 **Network capture.** Pass `-CaptureNetSeconds 60` (requires elevation)
 to bundle a `netsh trace` `.etl` during a reproduction window.
@@ -188,6 +192,17 @@ history log:
 %USERPROFILE%\diagnostics-history.json
 ```
 
-It's local to the machine the script runs on, capped at the last 100
-runs, and used only for the trend section. Delete it any time to
-reset trends.
+It's capped at the last 100 runs and used only for the trend section.
+Delete it any time to reset trends. If it can't be read (another
+program has it locked), the run leaves it alone rather than starting
+over; if it isn't valid JSON, it's kept as
+`diagnostics-history.json.unreadable-<time>` and a new one is started.
+
+To keep it somewhere else, for example next to your reports in Google
+Drive, set `SYSTEMTOOLS_HISTORY_PATH` to the full file path and move
+the existing file there. `system-diagnostics.ps1`,
+`trends-diagnostics.ps1` and the desktop app all read it:
+
+```powershell
+[Environment]::SetEnvironmentVariable('SYSTEMTOOLS_HISTORY_PATH', 'G:\My Drive\System-tools Reports\diagnostics-history.json', 'User')
+```

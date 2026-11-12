@@ -7,7 +7,7 @@ namespace SystemTools.Desktop.Services;
 /// <summary>
 /// Reads the diagnostics-history.json file written by
 /// system-diagnostics.ps1. Lives at %USERPROFILE%\diagnostics-history.json
-/// by default.
+/// by default, or wherever SYSTEMTOOLS_HISTORY_PATH points.
 /// </summary>
 public sealed class HistoryReader
 {
@@ -21,9 +21,12 @@ public sealed class HistoryReader
 
     public HistoryReader(string? overridePath = null)
     {
-        HistoryPath = overridePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "diagnostics-history.json");
+        var fromEnv = Environment.GetEnvironmentVariable("SYSTEMTOOLS_HISTORY_PATH");
+        HistoryPath = overridePath
+            ?? (string.IsNullOrWhiteSpace(fromEnv) ? null : fromEnv)
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "diagnostics-history.json");
     }
 
     public IReadOnlyList<RunHistoryEntry> Load()

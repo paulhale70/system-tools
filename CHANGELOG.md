@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-11
+
+Reports and trend history can live in a synced folder, and a code
+review's worth of diagnostics fixes: long event messages, the trend
+history, the app crash count, `-Sanitize`, the family `.bat` flow and
+the diff tool. The Media Inventory app moved to its own repository.
+
 ### diagnostics/
 
 - **Fix: trends never compared runs.** On Windows PowerShell 5.1,
@@ -23,6 +30,45 @@ versioning follows [Semantic Versioning](https://semver.org/).
   default. `-OutputRoot` still wins. Unset, nothing changes, so
   `run-diagnostics.bat` on family machines still leaves the zip on the
   Desktop.
+- If the reports folder can't be written when a run starts (for
+  example a Google Drive letter that isn't mounted yet), the report
+  goes to the Desktop with a WARN in its summary, instead of no report
+  at all.
+- `SYSTEMTOOLS_HISTORY_PATH` moves the trend history file. The
+  collector, `trends-diagnostics.ps1` and the desktop app all honour it.
+- **Fix: long event-log messages were dropped.** Messages were cut to
+  500 characters using their length *before* whitespace was collapsed,
+  which threw on long multi-line events (crashes, BSODs) and left them
+  blank in `05-events-*.csv`, `05-bugchecks.csv` and
+  `05-app-crashes.csv`.
+- **Fix: a failed read wiped the trend history.** If the history file
+  was locked or unreadable, the run replaced it with just itself. Now a
+  locked file is retried and then left alone, an invalid one is kept as
+  `.unreadable-<time>`, and writes go through a temp file.
+- **App crash count is real crashes only.** The summary counted every
+  Windows Error Reporting and .NET Runtime event, so 8 crashes showed up
+  as "192 app crash/hang events". It now counts Application Error 1000,
+  Application Hang 1002 and .NET Runtime 1026, and names the top apps.
+  `05-app-crashes.csv` still has everything.
+- **`-Sanitize` fixes.** The copied `Report.wer` files weren't redacted.
+  The user name was replaced before the profile path, so the profile
+  rule never matched. Names were replaced inside other words, so a
+  user called "al" turned "Installed" into "Inst<USER>led".
+- Run from `%TEMP%` (the `run-diagnostics.bat` flow), the project-files
+  step no longer fingerprints every file in `%TEMP%`. Without a git
+  checkout above the script it's skipped.
+- `run-diagnostics.bat` finds the zip on the real Desktop, including a
+  OneDrive-redirected one, and only picks a zip from the last 3 hours.
+  Before, it looked in `%USERPROFILE%\Desktop` and could copy nothing,
+  or an old zip's path. (Copies of the `.bat` already sent out keep the
+  old behaviour; send a fresh copy.)
+- `diff-diagnostics.ps1`:
+  - **Fix:** the Disks section always said the reports differed.
+  - Drivers that share a name (several "Generic USB Hub"s) no longer
+    show version changes that didn't happen.
+  - Comparing zips no longer leaves extracted copies in `%TEMP%`, and
+    the default output goes next to the newer zip instead of into a
+    temporary folder.
 
 ### Repository
 

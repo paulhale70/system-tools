@@ -23,7 +23,8 @@
     Path to the newer report folder or zip.
 
 .PARAMETER OutFile
-    Path to write the diff report. Default: <New folder>\diff-vs-<old>.txt.
+    Path to write the diff report. Default: diff-vs-<old>.txt inside the
+    newer report folder, or <new>-diff-vs-<old>.txt next to the newer zip.
 #>
 
 [CmdletBinding()]
@@ -45,6 +46,7 @@ function Resolve-ReportDir($path) {
         throw "Expected a folder or .zip: $path"
     }
     $dest = Join-Path $env:TEMP ("diff-" + [guid]::NewGuid().ToString('N'))
+    [void]$script:tempDirs.Add($dest)
     Expand-Archive -Path $item.FullName -DestinationPath $dest -Force
     return $dest
 }
@@ -63,132 +65,160 @@ function Read-LinesSafe($path) {
     return @()
 }
 
-$oldDir = Resolve-ReportDir $Old
-$newDir = Resolve-ReportDir $New
+$script:tempDirs = New-Object System.Collections.ArrayList
+try {
+    $oldDir = Resolve-ReportDir $Old
+    $newDir = Resolve-ReportDir $New
 
-$out = New-Object System.Text.StringBuilder
-$null = $out.AppendLine("Diagnostics diff")
-$null = $out.AppendLine("Old: $Old")
-$null = $out.AppendLine("New: $New")
-$null = $out.AppendLine(('=' * 70))
+    $out = New-Object System.Text.StringBuilder
+    $null = $out.AppendLine("Diagnostics diff")
+    $null = $out.AppendLine("Old: $Old")
+    $null = $out.AppendLine("New: $New")
+    $null = $out.AppendLine(('=' * 70))
 
-# --- Summary verdicts -------------------------------------------------------
-$oldSummary = Read-LinesSafe (Join-Path $oldDir '00-SUMMARY.txt') | Where-Object { $_ -match '^\[' }
-$newSummary = Read-LinesSafe (Join-Path $newDir '00-SUMMARY.txt') | Where-Object { $_ -match '^\[' }
-$addedVerdicts   = $newSummary | Where-Object { $oldSummary -notcontains $_ }
-$removedVerdicts = $oldSummary | Where-Object { $newSummary -notcontains $_ }
+    # --- Summary verdicts -------------------------------------------------------
+    $oldSummary = Read-LinesSafe (Join-Path $oldDir '00-SUMMARY.txt') | Where-Object { $_ -match '^\[' }
+    $newSummary = Read-LinesSafe (Join-Path $newDir '00-SUMMARY.txt') | Where-Object { $_ -match '^\[' }
+    $addedVerdicts   = $newSummary | Where-Object { $oldSummary -notcontains $_ }
+    $removedVerdicts = $oldSummary | Where-Object { $newSummary -notcontains $_ }
 
-$null = $out.AppendLine('')
-$null = $out.AppendLine('--- Summary verdicts ---')
-if ($addedVerdicts) {
-    $null = $out.AppendLine("Added ($($addedVerdicts.Count)):")
-    foreach ($v in $addedVerdicts) { $null = $out.AppendLine("  + $v") }
-}
-if ($removedVerdicts) {
-    $null = $out.AppendLine("Removed ($($removedVerdicts.Count)):")
-    foreach ($v in $removedVerdicts) { $null = $out.AppendLine("  - $v") }
-}
-if (-not $addedVerdicts -and -not $removedVerdicts) {
-    $null = $out.AppendLine('No changes.')
-}
-
-# --- Hotfixes ---------------------------------------------------------------
-$oldHf = Read-CsvSafe (Join-Path $oldDir '04-hotfixes.csv') | ForEach-Object { $_.HotFixID }
-$newHf = Read-CsvSafe (Join-Path $newDir '04-hotfixes.csv') | ForEach-Object { $_.HotFixID }
-$addedHf   = $newHf | Where-Object { $oldHf -notcontains $_ }
-$removedHf = $oldHf | Where-Object { $newHf -notcontains $_ }
-
-$null = $out.AppendLine('')
-$null = $out.AppendLine('--- Hotfixes ---')
-if ($addedHf)   { $a = $addedHf -join ', ';   $null = $out.AppendLine("Added:   $a") }
-if ($removedHf) { $r = $removedHf -join ', '; $null = $out.AppendLine("Removed: $r") }
-if (-not $addedHf -and -not $removedHf) { $null = $out.AppendLine('No changes.') }
-
-# --- Drivers ----------------------------------------------------------------
-$oldDrv = Read-CsvSafe (Join-Path $oldDir '07-drivers.csv')
-$newDrv = Read-CsvSafe (Join-Path $newDir '07-drivers.csv')
-$oldMap = @{}; foreach ($d in $oldDrv) { $oldMap[$d.DeviceName] = $d.DriverVersion }
-$newMap = @{}; foreach ($d in $newDrv) { $newMap[$d.DeviceName] = $d.DriverVersion }
-$addedDrv   = $newMap.Keys | Where-Object { -not $oldMap.ContainsKey($_) }
-$removedDrv = $oldMap.Keys | Where-Object { -not $newMap.ContainsKey($_) }
-$changedDrv = $newMap.Keys | Where-Object { $oldMap.ContainsKey($_) -and $oldMap[$_] -ne $newMap[$_] }
-
-$null = $out.AppendLine('')
-$null = $out.AppendLine('--- Drivers ---')
-if ($addedDrv) {
-    $null = $out.AppendLine("Added ($($addedDrv.Count)):")
-    foreach ($d in $addedDrv) { $null = $out.AppendLine("  + $d ($($newMap[$d]))") }
-}
-if ($removedDrv) {
-    $null = $out.AppendLine("Removed ($($removedDrv.Count)):")
-    foreach ($d in $removedDrv) { $null = $out.AppendLine("  - $d") }
-}
-if ($changedDrv) {
-    $null = $out.AppendLine("Version changed ($($changedDrv.Count)):")
-    foreach ($d in $changedDrv) { $null = $out.AppendLine("  ~ $d : $($oldMap[$d]) -> $($newMap[$d])") }
-}
-if (-not $addedDrv -and -not $removedDrv -and -not $changedDrv) {
-    $null = $out.AppendLine('No changes.')
-}
-
-# --- Services ---------------------------------------------------------------
-$oldSvc = Read-CsvSafe (Join-Path $oldDir '08-services.csv')
-$newSvc = Read-CsvSafe (Join-Path $newDir '08-services.csv')
-$oldSvcMap = @{}; foreach ($s in $oldSvc) { $oldSvcMap[$s.Name] = "$($s.Status)/$($s.StartType)" }
-$newSvcMap = @{}; foreach ($s in $newSvc) { $newSvcMap[$s.Name] = "$($s.Status)/$($s.StartType)" }
-$addedSvc   = $newSvcMap.Keys | Where-Object { -not $oldSvcMap.ContainsKey($_) }
-$removedSvc = $oldSvcMap.Keys | Where-Object { -not $newSvcMap.ContainsKey($_) }
-$changedSvc = $newSvcMap.Keys | Where-Object { $oldSvcMap.ContainsKey($_) -and $oldSvcMap[$_] -ne $newSvcMap[$_] }
-
-$null = $out.AppendLine('')
-$null = $out.AppendLine('--- Services ---')
-if ($addedSvc)   { $a = $addedSvc -join ', ';   $null = $out.AppendLine("Added:   $a") }
-if ($removedSvc) { $r = $removedSvc -join ', '; $null = $out.AppendLine("Removed: $r") }
-if ($changedSvc) {
-    $null = $out.AppendLine("State/StartType changed ($($changedSvc.Count)):")
-    foreach ($s in $changedSvc) { $null = $out.AppendLine("  ~ $s : $($oldSvcMap[$s]) -> $($newSvcMap[$s])") }
-}
-if (-not $addedSvc -and -not $removedSvc -and -not $changedSvc) {
-    $null = $out.AppendLine('No changes.')
-}
-
-# --- Startup items ----------------------------------------------------------
-$oldSu = (Read-CsvSafe (Join-Path $oldDir '08-startup.csv')) | ForEach-Object { "$($_.Name) | $($_.Command)" }
-$newSu = (Read-CsvSafe (Join-Path $newDir '08-startup.csv')) | ForEach-Object { "$($_.Name) | $($_.Command)" }
-$addedSu   = $newSu | Where-Object { $oldSu -notcontains $_ }
-$removedSu = $oldSu | Where-Object { $newSu -notcontains $_ }
-$null = $out.AppendLine('')
-$null = $out.AppendLine('--- Startup items ---')
-if ($addedSu)   { foreach ($s in $addedSu)   { $null = $out.AppendLine("  + $s") } }
-if ($removedSu) { foreach ($s in $removedSu) { $null = $out.AppendLine("  - $s") } }
-if (-not $addedSu -and -not $removedSu) { $null = $out.AppendLine('No changes.') }
-
-# --- Event log counts -------------------------------------------------------
-$null = $out.AppendLine('')
-$null = $out.AppendLine('--- Event log counts (System, Application) ---')
-foreach ($log in 'System','Application') {
-    $oldCount = (Read-CsvSafe (Join-Path $oldDir "05-events-$log.csv")).Count
-    $newCount = (Read-CsvSafe (Join-Path $newDir "05-events-$log.csv")).Count
-    $delta = $newCount - $oldCount
-    $sign = if ($delta -gt 0) { '+' } elseif ($delta -lt 0) { '' } else { ' ' }
-    $null = $out.AppendLine(("  {0,-12} {1,6} -> {2,6}  ({3}{4})" -f $log, $oldCount, $newCount, $sign, $delta))
-}
-
-# --- Disk space -------------------------------------------------------------
-$oldDisks = Read-LinesSafe (Join-Path $oldDir '01-disks.txt') -join "`n"
-$newDisks = Read-LinesSafe (Join-Path $newDir '01-disks.txt') -join "`n"
-if ($oldDisks -and $newDisks -and $oldDisks -ne $newDisks) {
     $null = $out.AppendLine('')
-    $null = $out.AppendLine('--- Disks ---')
-    $null = $out.AppendLine('(see 01-disks.txt in each report for raw values; they differ)')
-}
+    $null = $out.AppendLine('--- Summary verdicts ---')
+    if ($addedVerdicts) {
+        $null = $out.AppendLine("Added ($($addedVerdicts.Count)):")
+        foreach ($v in $addedVerdicts) { $null = $out.AppendLine("  + $v") }
+    }
+    if ($removedVerdicts) {
+        $null = $out.AppendLine("Removed ($($removedVerdicts.Count)):")
+        foreach ($v in $removedVerdicts) { $null = $out.AppendLine("  - $v") }
+    }
+    if (-not $addedVerdicts -and -not $removedVerdicts) {
+        $null = $out.AppendLine('No changes.')
+    }
 
-# --- Output -----------------------------------------------------------------
-if (-not $OutFile) {
-    $OutFile = Join-Path $newDir ("diff-vs-" + (Split-Path $oldDir -Leaf) + '.txt')
+    # --- Hotfixes ---------------------------------------------------------------
+    $oldHf = Read-CsvSafe (Join-Path $oldDir '04-hotfixes.csv') | ForEach-Object { $_.HotFixID }
+    $newHf = Read-CsvSafe (Join-Path $newDir '04-hotfixes.csv') | ForEach-Object { $_.HotFixID }
+    $addedHf   = $newHf | Where-Object { $oldHf -notcontains $_ }
+    $removedHf = $oldHf | Where-Object { $newHf -notcontains $_ }
+
+    $null = $out.AppendLine('')
+    $null = $out.AppendLine('--- Hotfixes ---')
+    if ($addedHf)   { $a = $addedHf -join ', ';   $null = $out.AppendLine("Added:   $a") }
+    if ($removedHf) { $r = $removedHf -join ', '; $null = $out.AppendLine("Removed: $r") }
+    if (-not $addedHf -and -not $removedHf) { $null = $out.AppendLine('No changes.') }
+
+    # --- Drivers ----------------------------------------------------------------
+    # Names repeat (several "Generic USB Hub"s), so compare each name's
+    # sorted list of versions; one version per name mixed devices up.
+    function Get-DriverVersions($rows) {
+        $byName = @{}
+        foreach ($d in $rows) {
+            if (-not $d.DeviceName) { continue }
+            if (-not $byName.ContainsKey($d.DeviceName)) {
+                $byName[$d.DeviceName] = New-Object System.Collections.ArrayList
+            }
+            [void]$byName[$d.DeviceName].Add([string]$d.DriverVersion)
+        }
+        $map = @{}
+        foreach ($k in $byName.Keys) { $map[$k] = (@($byName[$k] | Sort-Object) -join ', ') }
+        return $map
+    }
+    $oldDrv = Read-CsvSafe (Join-Path $oldDir '07-drivers.csv')
+    $newDrv = Read-CsvSafe (Join-Path $newDir '07-drivers.csv')
+    $oldMap = Get-DriverVersions $oldDrv
+    $newMap = Get-DriverVersions $newDrv
+    $addedDrv   = $newMap.Keys | Where-Object { -not $oldMap.ContainsKey($_) }
+    $removedDrv = $oldMap.Keys | Where-Object { -not $newMap.ContainsKey($_) }
+    $changedDrv = $newMap.Keys | Where-Object { $oldMap.ContainsKey($_) -and $oldMap[$_] -ne $newMap[$_] }
+
+    $null = $out.AppendLine('')
+    $null = $out.AppendLine('--- Drivers ---')
+    if ($addedDrv) {
+        $null = $out.AppendLine("Added ($($addedDrv.Count)):")
+        foreach ($d in $addedDrv) { $null = $out.AppendLine("  + $d ($($newMap[$d]))") }
+    }
+    if ($removedDrv) {
+        $null = $out.AppendLine("Removed ($($removedDrv.Count)):")
+        foreach ($d in $removedDrv) { $null = $out.AppendLine("  - $d") }
+    }
+    if ($changedDrv) {
+        $null = $out.AppendLine("Version changed ($($changedDrv.Count)):")
+        foreach ($d in $changedDrv) { $null = $out.AppendLine("  ~ $d : $($oldMap[$d]) -> $($newMap[$d])") }
+    }
+    if (-not $addedDrv -and -not $removedDrv -and -not $changedDrv) {
+        $null = $out.AppendLine('No changes.')
+    }
+
+    # --- Services ---------------------------------------------------------------
+    $oldSvc = Read-CsvSafe (Join-Path $oldDir '08-services.csv')
+    $newSvc = Read-CsvSafe (Join-Path $newDir '08-services.csv')
+    $oldSvcMap = @{}; foreach ($s in $oldSvc) { $oldSvcMap[$s.Name] = "$($s.Status)/$($s.StartType)" }
+    $newSvcMap = @{}; foreach ($s in $newSvc) { $newSvcMap[$s.Name] = "$($s.Status)/$($s.StartType)" }
+    $addedSvc   = $newSvcMap.Keys | Where-Object { -not $oldSvcMap.ContainsKey($_) }
+    $removedSvc = $oldSvcMap.Keys | Where-Object { -not $newSvcMap.ContainsKey($_) }
+    $changedSvc = $newSvcMap.Keys | Where-Object { $oldSvcMap.ContainsKey($_) -and $oldSvcMap[$_] -ne $newSvcMap[$_] }
+
+    $null = $out.AppendLine('')
+    $null = $out.AppendLine('--- Services ---')
+    if ($addedSvc)   { $a = $addedSvc -join ', ';   $null = $out.AppendLine("Added:   $a") }
+    if ($removedSvc) { $r = $removedSvc -join ', '; $null = $out.AppendLine("Removed: $r") }
+    if ($changedSvc) {
+        $null = $out.AppendLine("State/StartType changed ($($changedSvc.Count)):")
+        foreach ($s in $changedSvc) { $null = $out.AppendLine("  ~ $s : $($oldSvcMap[$s]) -> $($newSvcMap[$s])") }
+    }
+    if (-not $addedSvc -and -not $removedSvc -and -not $changedSvc) {
+        $null = $out.AppendLine('No changes.')
+    }
+
+    # --- Startup items ----------------------------------------------------------
+    $oldSu = (Read-CsvSafe (Join-Path $oldDir '08-startup.csv')) | ForEach-Object { "$($_.Name) | $($_.Command)" }
+    $newSu = (Read-CsvSafe (Join-Path $newDir '08-startup.csv')) | ForEach-Object { "$($_.Name) | $($_.Command)" }
+    $addedSu   = $newSu | Where-Object { $oldSu -notcontains $_ }
+    $removedSu = $oldSu | Where-Object { $newSu -notcontains $_ }
+    $null = $out.AppendLine('')
+    $null = $out.AppendLine('--- Startup items ---')
+    if ($addedSu)   { foreach ($s in $addedSu)   { $null = $out.AppendLine("  + $s") } }
+    if ($removedSu) { foreach ($s in $removedSu) { $null = $out.AppendLine("  - $s") } }
+    if (-not $addedSu -and -not $removedSu) { $null = $out.AppendLine('No changes.') }
+
+    # --- Event log counts -------------------------------------------------------
+    $null = $out.AppendLine('')
+    $null = $out.AppendLine('--- Event log counts (System, Application) ---')
+    foreach ($log in 'System','Application') {
+        $oldCount = (Read-CsvSafe (Join-Path $oldDir "05-events-$log.csv")).Count
+        $newCount = (Read-CsvSafe (Join-Path $newDir "05-events-$log.csv")).Count
+        $delta = $newCount - $oldCount
+        $sign = if ($delta -gt 0) { '+' } elseif ($delta -lt 0) { '' } else { ' ' }
+        $null = $out.AppendLine(("  {0,-12} {1,6} -> {2,6}  ({3}{4})" -f $log, $oldCount, $newCount, $sign, $delta))
+    }
+
+    # --- Disk space -------------------------------------------------------------
+    $oldDisks = (Read-LinesSafe (Join-Path $oldDir '01-disks.txt')) -join "`n"
+    $newDisks = (Read-LinesSafe (Join-Path $newDir '01-disks.txt')) -join "`n"
+    if ($oldDisks -and $newDisks -and $oldDisks -ne $newDisks) {
+        $null = $out.AppendLine('')
+        $null = $out.AppendLine('--- Disks ---')
+        $null = $out.AppendLine('(see 01-disks.txt in each report for raw values; they differ)')
+    }
+
+    # --- Output -----------------------------------------------------------------
+    if (-not $OutFile) {
+        # Beside the inputs, never inside a temporary extraction folder.
+        $oldItem = Get-Item $Old
+        $newItem = Get-Item $New
+        $oldName = if ($oldItem.PSIsContainer) { $oldItem.Name } else { $oldItem.BaseName }
+        if ($newItem.PSIsContainer) {
+            $OutFile = Join-Path $newItem.FullName "diff-vs-$oldName.txt"
+        } else {
+            $OutFile = Join-Path $newItem.DirectoryName "$($newItem.BaseName)-diff-vs-$oldName.txt"
+        }
+    }
+    $out.ToString() | Set-Content -Path $OutFile -Encoding UTF8
+    Write-Host ''
+    Write-Host "Diff written to: $OutFile" -ForegroundColor Green
+    Write-Host ''
+    $out.ToString() | Write-Host
+} finally {
+    foreach ($t in $script:tempDirs) { Remove-Item $t -Recurse -Force -ErrorAction SilentlyContinue }
 }
-$out.ToString() | Set-Content -Path $OutFile -Encoding UTF8
-Write-Host ''
-Write-Host "Diff written to: $OutFile" -ForegroundColor Green
-Write-Host ''
-$out.ToString() | Write-Host
