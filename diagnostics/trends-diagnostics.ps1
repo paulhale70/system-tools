@@ -41,7 +41,11 @@ if (-not (Test-Path $HistoryPath)) {
 }
 
 $raw = Get-Content $HistoryPath -Raw
-$history = @($raw | ConvertFrom-Json)
+# Assign first: Windows PowerShell 5.1's ConvertFrom-Json emits a JSON
+# array as ONE object, so @(... | ConvertFrom-Json) wraps the whole
+# history as a single run. @() on the variable keeps the array as-is.
+$loaded  = $raw | ConvertFrom-Json
+$history = @($loaded)
 
 if ($Project)      { $history = @($history | Where-Object { $_.project -eq $Project }) }
 if ($ComputerName) { $history = @($history | Where-Object { $_.host    -eq $ComputerName }) }

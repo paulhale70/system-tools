@@ -24,7 +24,9 @@
         Finalize-Report -ReportDir $dir
 
 .PARAMETER OutputRoot
-    Directory where the report folder and zip are written. Default: Desktop.
+    Directory where the report folder and zip are written. Default: the
+    SYSTEMTOOLS_REPORTS_DIR environment variable when it is set (e.g. a
+    Google Drive or OneDrive folder), otherwise the Desktop.
 
 .PARAMETER EventLogDays
     Days of Application/System event log entries to collect. Default: 7.
@@ -77,7 +79,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$OutputRoot        = [Environment]::GetFolderPath('Desktop'),
+    [string]$OutputRoot        = $(if ($env:SYSTEMTOOLS_REPORTS_DIR) { $env:SYSTEMTOOLS_REPORTS_DIR } else { [Environment]::GetFolderPath('Desktop') }),
     [int]$EventLogDays         = 7,
     [string]$ProjectName       = 'System',
     [string[]]$Endpoints       = @(),
@@ -466,7 +468,11 @@ function Get-RunTrends {
     if (-not (Test-Path $script:HISTORY_PATH)) { return $null }
     try {
         $raw = Get-Content $script:HISTORY_PATH -Raw -ErrorAction Stop
-        $history = @($raw | ConvertFrom-Json)
+        # Assign first: Windows PowerShell 5.1's ConvertFrom-Json emits a JSON
+        # array as ONE object, so @(... | ConvertFrom-Json) wraps the whole
+        # history as a single run. @() on the variable keeps the array as-is.
+        $loaded  = $raw | ConvertFrom-Json
+        $history = @($loaded)
     } catch { return $null }
 
     $relevant = @($history | Where-Object { $_.host -eq $HostName -and $_.project -eq $Project })
@@ -560,7 +566,7 @@ function Format-TrendsText {
 
 function Initialize-Report {
     param(
-        [string]$OutputRoot  = [Environment]::GetFolderPath('Desktop'),
+        [string]$OutputRoot  = $(if ($env:SYSTEMTOOLS_REPORTS_DIR) { $env:SYSTEMTOOLS_REPORTS_DIR } else { [Environment]::GetFolderPath('Desktop') }),
         [string]$ProjectName = 'System'
     )
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
