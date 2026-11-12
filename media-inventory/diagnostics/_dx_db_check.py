@@ -1,7 +1,7 @@
-"""Diagnostic helper invoked by collect-diagnostics.ps1.
+"""Diagnostic helper invoked by diagnostics/app-diagnostics.ps1.
 
 Resolves database.DB_PATH, then opens the file and reports integrity,
-row counts, and schema. Run from the project root so `import database`
+row counts, and schema. Run with media-inventory/ as the working directory so `import database`
 works.
 """
 import json

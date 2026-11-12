@@ -11,11 +11,14 @@ and track trends across past runs so recurring problems become obvious.
 | Script | What it does |
 | --- | --- |
 | `system-diagnostics.ps1` | Generic Windows collector. Project-agnostic. Run it in any folder. |
-| `app-diagnostics.ps1`    | Media Inventory Scanner wrapper. Adds DB / log / lookup checks. |
 | `diff-diagnostics.ps1`   | Compare two diagnostic reports. Shows what changed since the last run. |
 | `trends-diagnostics.ps1` | View trends across all past runs (recurring issues, history). |
 | `run-diagnostics.bat`    | Double-clickable launcher for non-technical users. |
 | `install.ps1`            | Copy `system-diagnostics.ps1` to `~/bin/` and add it to PATH. |
+
+Project-specific wrappers live with their project, e.g.
+[`media-inventory/diagnostics/app-diagnostics.ps1`](../media-inventory/diagnostics/app-diagnostics.ps1)
+(adds Media Inventory DB / log / lookup checks).
 
 ---
 
