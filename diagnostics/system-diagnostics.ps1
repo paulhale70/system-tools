@@ -24,7 +24,9 @@
         Finalize-Report -ReportDir $dir
 
 .PARAMETER OutputRoot
-    Directory where the report folder and zip are written. Default: Desktop.
+    Directory where the report folder and zip are written. Default: the
+    SYSTEMTOOLS_REPORTS_DIR environment variable when it is set (e.g. a
+    Google Drive or OneDrive folder), otherwise the Desktop.
 
 .PARAMETER EventLogDays
     Days of Application/System event log entries to collect. Default: 7.
@@ -77,7 +79,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$OutputRoot        = [Environment]::GetFolderPath('Desktop'),
+    [string]$OutputRoot        = $(if ($env:SYSTEMTOOLS_REPORTS_DIR) { $env:SYSTEMTOOLS_REPORTS_DIR } else { [Environment]::GetFolderPath('Desktop') }),
     [int]$EventLogDays         = 7,
     [string]$ProjectName       = 'System',
     [string[]]$Endpoints       = @(),
@@ -564,7 +566,7 @@ function Format-TrendsText {
 
 function Initialize-Report {
     param(
-        [string]$OutputRoot  = [Environment]::GetFolderPath('Desktop'),
+        [string]$OutputRoot  = $(if ($env:SYSTEMTOOLS_REPORTS_DIR) { $env:SYSTEMTOOLS_REPORTS_DIR } else { [Environment]::GetFolderPath('Desktop') }),
         [string]$ProjectName = 'System'
     )
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'

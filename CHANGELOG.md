@@ -17,6 +17,12 @@ versioning follows [Semantic Versioning](https://semver.org/).
   Fixed in `system-diagnostics.ps1` (`Get-RunTrends`) and
   `trends-diagnostics.ps1`. The history file itself was always written
   correctly, so past runs show up in trends straight away.
+- Reports can go somewhere other than the Desktop: set the
+  `SYSTEMTOOLS_REPORTS_DIR` environment variable (for example to a
+  Google Drive folder) and `system-diagnostics.ps1` writes there by
+  default. `-OutputRoot` still wins. Unset, nothing changes, so
+  `run-diagnostics.bat` on family machines still leaves the zip on the
+  Desktop.
 
 ### Repository
 
