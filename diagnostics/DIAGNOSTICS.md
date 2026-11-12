@@ -13,6 +13,7 @@ and track trends across past runs so recurring problems become obvious.
 | `system-diagnostics.ps1` | Generic Windows collector. Project-agnostic. Run it in any folder. |
 | `diff-diagnostics.ps1`   | Compare two diagnostic reports. Shows what changed since the last run. |
 | `trends-diagnostics.ps1` | View trends across all past runs (recurring issues, history). |
+| `analyze-dump.ps1`       | Analyze any crash dump (`.dmp`) and explain it in plain English. |
 | `run-diagnostics.bat`    | Double-clickable launcher for non-technical users. |
 | `install.ps1`            | Copy `system-diagnostics.ps1` to `~/bin/` and add it to PATH. |
 
@@ -114,16 +115,22 @@ made a difference:
 ```
 
 **Crash-dump auto-analysis.** If a Windows debugger (`cdb.exe`) is
-installed, the script runs `!analyze -v` against dumps from the last 30
-days and explains the bug-check code in plain English:
+installed, the script runs `!analyze -v` against up to three of each
+kind of dump from the last 30 days and explains it in plain English:
+what crashed, the bug-check or exception code, the module at fault and
+who makes it, and what to do.
 
 - `C:\Windows\Minidump` - blue-screen crashes (reported as FAIL)
 - `C:\Windows\LiveKernelReports` - hangs Windows recovered from, such as
   graphics timeouts or a black screen fixed by holding the power button
-  (reported as WARN, marked "live dump"; files over 256 MB are skipped)
+  (reported as WARN, marked "live dump")
+- `%LOCALAPPDATA%\CrashDumps` and Windows Error Reporting `.mdmp` /
+  `.hdmp` files - app crashes (reported as WARN)
 - `C:\Windows\MEMORY.DMP` with `-AnalyzeKernelDump` (slow)
 
-Run elevated so the dump folders are readable. Any of these debuggers
+Dumps over 256 MB are skipped here; analyze those on their own with
+`analyze-dump.ps1`. Run elevated so the Windows dump folders are
+readable. Any of these debuggers
 works: the Windows SDK "Debugging Tools for Windows", or WinDbg from the
 Microsoft Store (`winget install Microsoft.WinDbg`). Windows will not let
 scripts start the Store version from its install folder, so the first
@@ -132,6 +139,19 @@ analysis copies its debugger (~135 MB) to
 from Microsoft's public symbol server and are cached in
 `%TEMP%\SymbolCache` (`-DumpSymbolCache` to change); the first analysis
 downloads a few hundred MB.
+
+**Analyze one dump.** `analyze-dump.ps1` does the same analysis on any
+dump you choose, including big ones and dumps from other PCs, and
+writes a `DumpAnalysis-<time>` folder (next to your reports) with an
+HTML page: the plain-English verdict, the facts `!analyze` found, the
+top of the stack, and the full debugger output. The desktop app's
+**Crash dumps** tab is the same thing with a list to click.
+
+```powershell
+.\analyze-dump.ps1 -List                     # dumps on this PC, newest first
+.\analyze-dump.ps1                           # pick from that list
+.\analyze-dump.ps1 C:\Users\me\Downloads\mom-laptop.dmp
+```
 
 **PII redaction.** Pass `-Sanitize` to redact username, host name,
 USERPROFILE path, MAC addresses, and private IPs from every text file

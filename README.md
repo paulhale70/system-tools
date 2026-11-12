@@ -25,6 +25,7 @@ is a separate app, so it now has its own repository:
 - **One-shot run without installing anything**: `diagnostics/run-diagnostics.bat`
 - **View history on a machine without the app** (or a non-Windows one): open `web/index.html` in a browser
 - **Compare** two runs from a script: `diagnostics/diff-diagnostics.ps1`
+- **Explain a crash dump** (blue screen or app crash): the app's Crash dumps tab, or `diagnostics/analyze-dump.ps1`
 - **Help non-technical family**: email them `diagnostics/run-diagnostics.bat`
 
 ## Quick links

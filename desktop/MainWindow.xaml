@@ -85,6 +85,9 @@
                                  Content="Diff" Checked="OnNavDiff"
                                  IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Diff}" />
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 Content="Crash dumps" Checked="OnNavDumps"
+                                 IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Dumps}" />
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
                                  Content="Plugins" Checked="OnNavPlugins"
                                  IsChecked="{Binding SelectedTab, Mode=OneWay, Converter={StaticResource EnumEquals}, ConverterParameter=Plugins}" />
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
@@ -98,6 +101,7 @@
                 <v:RunView       Visibility="{Binding IsRunTab,       Converter={StaticResource BoolToVis}}" />
                 <v:DashboardView Visibility="{Binding IsDashboardTab, Converter={StaticResource BoolToVis}}" />
                 <v:DiffView      Visibility="{Binding IsDiffTab,      Converter={StaticResource BoolToVis}}" />
+                <v:DumpsView     Visibility="{Binding IsDumpsTab,     Converter={StaticResource BoolToVis}}" />
                 <v:PluginsView  Visibility="{Binding IsPluginsTab,  Converter={StaticResource BoolToVis}}" />
                 <v:SettingsView Visibility="{Binding IsSettingsTab, Converter={StaticResource BoolToVis}}" />
             </Grid>

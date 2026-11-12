@@ -14,6 +14,7 @@ double-click.
 | --- | --- |
 | **Run** | Run button + `-Sanitize` / `-IncludeMiniDumps` / `-CaptureNetSeconds` toggles. History sidebar (newest first, OK/WARN/FAIL count pills). Embedded WebView2 renders the selected `00-summary.html`. |
 | **Diff** | Pick any two recorded runs and compare them. Invokes `diff-diagnostics.ps1` in the background and shows the resulting text inline. |
+| **Crash dumps** | Lists the crash dumps on this PC (blue screens, recovered hangs, app crashes) from the last 90 days. Pick one, or browse for any `.dmp`, and click Analyze: `analyze-dump.ps1` runs the Windows debugger and the plain-English report opens in the tab. Offers to restart as administrator when the Windows dump folders can't be read. |
 | **Dashboard** | `web/index.html` (Overview / History / Trends / Recurring), served from inside the `.exe` with its libraries, so it works offline. The history is pushed in automatically and refreshed after each run. |
 | **Plugins** | List of `.ps1` files in `diagnostics/plugins/`. Import a new plugin, enable / disable (rename `.ps1 <-> .ps1.disabled`), delete, open the folder, reload. Active plugins are dot-sourced by `system-diagnostics.ps1` after section 10. |
 | **Settings** | Weekly scheduled run via `schtasks.exe` (day + time + sanitize toggle). Update check against the GitHub releases API with one-click jump to the release page. Current/latest version. |
@@ -91,12 +92,14 @@ ViewModels/
   MainViewModel          Root: navigation state, history list, run
                          action; owns the sub-view-models.
   DiffViewModel          Picks two runs; calls DiffService.
+  DumpsViewModel         Dump list, analyze / cancel, report URI.
   PluginsViewModel       Wraps PluginManager (list / enable / disable
                          / delete / import).
   SettingsViewModel      Schedule editor + update checker.
 Views/
   RunView                Toolbar, history sidebar, WebView2 report.
   DiffView               Two run pickers + Compare button + diff text.
+  DumpsView              Dump list + Analyze / Browse + WebView2 report.
   DashboardView          WebView2 hosting web/index.html; serves it
                          and its vendored libraries from embedded
                          resources and posts the history to it.
@@ -108,6 +111,8 @@ Services/
   DiagnosticsRunner      Spawns powershell.exe with system-diagnostics.ps1.
   HistoryReader          Loads diagnostics-history.json.
   DiffService            Invokes diff-diagnostics.ps1.
+  DumpService            Invokes analyze-dump.ps1 (-List / -Path) and
+                         reads its -JsonOut file.
   PluginManager          Enumerates diagnostics/plugins/.
   ScheduledTaskService   Wraps schtasks.exe for register/remove/query.
   UpdateChecker          GET github releases API; semver compare.
