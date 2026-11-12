@@ -1,5 +1,0 @@
-# Required
-requests>=2.28.0
-
-# Optional — enables cover art thumbnails
-Pillow>=9.0.0

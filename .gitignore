@@ -1,11 +1,5 @@
-__pycache__/
-*.pyc
-*.pyo
-*.db
-*.sqlite
 *.log
 *.log.*
-.env
 
 # .NET / Visual Studio (desktop/)
 bin/

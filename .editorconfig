@@ -16,7 +16,7 @@ end_of_line = crlf
 [*.{bat,cmd}]
 end_of_line = crlf
 
-[*.{py,md}]
+[*.md]
 end_of_line = lf
 
 [*.md]
