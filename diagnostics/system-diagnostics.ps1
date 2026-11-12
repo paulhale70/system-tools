@@ -926,7 +926,7 @@ $script:BUGCHECK_HINTS = @{
 # Exception codes in application crash dumps, with plain-English hints.
 $script:EXCEPTION_HINTS = @{
     'C0000005' = 'access violation: the program used memory it does not own. Usually a bug in the program or in the module named (often an add-in, overlay or helper). Update or reinstall it.'
-    'C0000409' = 'fail-fast / stack buffer overrun: the program detected corruption and stopped itself. Update the program; for a Windows component, install Windows updates.'
+    'C0000409' = 'fail-fast / stack buffer overrun: the program detected corruption and stopped itself. Update the program.'
     'C0000602' = 'fail-fast: the program stopped itself after an unrecoverable error. Update the program.'
     'C0000374' = 'heap corruption: the program damaged its own memory. Update or reinstall it; third-party add-ins are a common cause.'
     'C00000FD' = 'stack overflow: runaway recursion in the program. A program bug; update it.'
