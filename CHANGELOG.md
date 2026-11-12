@@ -34,7 +34,6 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - Root README gains a layout section and notes that
   `diagnostics/system-diagnostics.ps1` must stay put, because emailed
   copies of `run-diagnostics.bat` download it from that path.
-
 - **Media Inventory Scanner moved to its own repository**,
   [paulhale70/media-inventory](https://github.com/paulhale70/media-inventory),
   with its full history. `media-inventory/` is gone from this repo, and
