@@ -29,20 +29,20 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - `SystemTools.sln` at the root, so the app opens and builds from the
   top level (`dotnet build SystemTools.sln`).
 - `.editorconfig` records the existing conventions (UTF-8 BOM + CRLF
-  for PowerShell, CRLF for batch files, LF for Python and Markdown,
-  4-space indent).
+  for PowerShell, CRLF for batch files, LF for Markdown, 4-space
+  indent).
 - Root README gains a layout section and notes that
   `diagnostics/system-diagnostics.ps1` must stay put, because emailed
   copies of `run-diagnostics.bat` download it from that path.
-
-### media-inventory/
-
-- The diagnostics wrapper and its helpers moved into
-  `media-inventory/diagnostics/` (`app-diagnostics.ps1`,
-  `_dx_db_check.py`, `_dx_lookup_check.py`), out of the app's source
-  files. Paths are resolved from the script's location, so it runs
-  from any working directory. Run it with
-  `.\diagnosticspp-diagnostics.ps1`. The README now documents it.
+- **Media Inventory Scanner moved to its own repository**,
+  [paulhale70/media-inventory](https://github.com/paulhale70/media-inventory),
+  with its full history. `media-inventory/` is gone from this repo, and
+  the Python-only entries left `.gitignore`, `.gitattributes` and
+  `.editorconfig`. Its diagnostics wrapper now finds
+  `system-diagnostics.ps1` on its own (a sibling `system-tools`
+  checkout, the app's unpacked copy, or a download from `main`).
+- Fix two control characters in the README and CHANGELOG where `\b` and
+  `\a` in a path had been turned into backspace and bell.
 
 ## [1.4.1] - 2026-10-20
 

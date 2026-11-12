@@ -17,8 +17,10 @@ and track trends across past runs so recurring problems become obvious.
 | `install.ps1`            | Copy `system-diagnostics.ps1` to `~/bin/` and add it to PATH. |
 
 Project-specific wrappers live with their project, e.g.
-[`media-inventory/diagnostics/app-diagnostics.ps1`](../media-inventory/diagnostics/app-diagnostics.ps1)
-(adds Media Inventory DB / log / lookup checks).
+[`diagnostics/app-diagnostics.ps1`](https://github.com/paulhale70/media-inventory/blob/main/diagnostics/app-diagnostics.ps1)
+in the Media Inventory repo (adds DB / log / lookup checks). A wrapper
+dot-sources `system-diagnostics.ps1` to get its functions, then adds
+its own sections.
 
 ---
 
