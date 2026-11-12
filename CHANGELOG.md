@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-11
+
+Reports and trend history can live in a synced folder, and a code
+review's worth of diagnostics fixes: long event messages, the trend
+history, the app crash count, `-Sanitize`, the family `.bat` flow and
+the diff tool. The Media Inventory app moved to its own repository.
+
 ### diagnostics/
 
 - **Fix: trends never compared runs.** On Windows PowerShell 5.1,

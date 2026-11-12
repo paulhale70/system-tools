@@ -100,7 +100,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
 $script:TOOL_NAME    = 'System-tools diagnostics'
-$script:TOOL_VERSION = '1.4.1'
+$script:TOOL_VERSION = '1.5.0'
 # SYSTEMTOOLS_HISTORY_PATH moves the trend history, e.g. next to the
 # reports in a synced folder. trends-diagnostics.ps1 and the desktop app
 # read the same variable.
