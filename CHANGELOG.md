@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### diagnostics/
+
+- Reports can go somewhere other than the Desktop: set the
+  `SYSTEMTOOLS_REPORTS_DIR` environment variable (for example to a
+  Google Drive folder) and `system-diagnostics.ps1` writes there by
+  default. `-OutputRoot` still wins. Unset, nothing changes, so
+  `run-diagnostics.bat` on family machines still leaves the zip on the
+  Desktop.
+
 ### Repository
 
 - `SystemTools.sln` at the root, so the app opens and builds from the

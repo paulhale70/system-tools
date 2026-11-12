@@ -32,8 +32,21 @@ cd System-tools\diagnostics
 .\system-diagnostics.ps1
 ```
 
-The script runs through ten or so sections, writes a folder to your
-Desktop, and opens `00-summary.html` in your browser.
+The script runs through ten or so sections, writes a report folder and
+zip, and opens `00-summary.html` in your browser.
+
+**Where reports go.** By default, the Desktop. To keep them somewhere
+else on your own machine (a Google Drive or OneDrive folder, say), set
+`SYSTEMTOOLS_REPORTS_DIR` once:
+
+```powershell
+[Environment]::SetEnvironmentVariable('SYSTEMTOOLS_REPORTS_DIR', 'G:\My Drive\System-tools Reports', 'User')
+```
+
+New PowerShell windows, the desktop app (after a restart) and scheduled
+runs pick it up. `-OutputRoot` still overrides it for a single run.
+Leave it unset on family machines: `run-diagnostics.bat` and
+INSTRUCTIONS-FOR-USERS.md expect the zip on the Desktop.
 
 To make it available from any folder:
 
@@ -141,8 +154,9 @@ to bundle a `netsh trace` `.etl` during a reproduction window.
 )
 
 # Compare last week vs today
-.\diff-diagnostics.ps1 -Old (Get-ChildItem ~/Desktop\*-Diagnostics-*.zip | Sort LastWriteTime | Select -First 1).FullName `
-                       -New (Get-ChildItem ~/Desktop\*-Diagnostics-*.zip | Sort LastWriteTime -Descending | Select -First 1).FullName
+$reports = if ($env:SYSTEMTOOLS_REPORTS_DIR) { $env:SYSTEMTOOLS_REPORTS_DIR } else { [Environment]::GetFolderPath('Desktop') }
+.\diff-diagnostics.ps1 -Old (Get-ChildItem $reports\*-Diagnostics-*.zip | Sort LastWriteTime | Select -First 1).FullName `
+                       -New (Get-ChildItem $reports\*-Diagnostics-*.zip | Sort LastWriteTime -Descending | Select -First 1).FullName
 
 # View trends across all runs
 .\trends-diagnostics.ps1
